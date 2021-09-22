@@ -1189,7 +1189,7 @@ function RSourceLines(...)
     if !g:R_commented_lines
         let newlines = []
         for line in lines
-            if line !~ '^\s*#'
+            if line !~ "^\s*#[^']"
                 call add(newlines, line)
             endif
         endfor
