@@ -14,12 +14,16 @@ endif
 " From changelog.vim, with bug fixed by "Si" ("i5ivem")
 " Windows logins can include domain, e.g: 'DOMAIN\Username', need to remove
 " the backslash from this as otherwise cause file path problems.
-if executable("whoami")
-    let g:rplugin.userlogin = system('whoami')
-elseif $USERNAME != ""
-    let g:rplugin.userlogin = $USERNAME
+if $LOGNAME != ""
+    let g:rplugin.userlogin = $LOGNAME
 elseif $USER != ""
     let g:rplugin.userlogin = $USER
+elseif $USERNAME != ""
+    let g:rplugin.userlogin = $USERNAME
+elseif $HOME != ""
+    let g:rplugin.userlogin = substitute($HOME, '.*/', '', '')
+elseif executable("whoami")
+    let g:rplugin.userlogin = system('whoami')
 else
     call RWarningMsg("Could not determine user name.")
     let g:rplugin.failed = 1
@@ -54,6 +58,15 @@ endif
 " Create the directory if it doesn't exist yet
 if !isdirectory(g:rplugin.compldir)
     call mkdir(g:rplugin.compldir, "p")
+endif
+
+if filereadable(g:rplugin.compldir . "/uname")
+    let g:rplugin.is_darwin = readfile(g:rplugin.compldir . "/README")[0] =~ "Darwin"
+else
+    let s:uname = system("uname")
+    let g:rplugin.is_darwin = s:uname  =~ "Darwin"
+    call writefile([s:uname], g:rplugin.compldir . "/uname")
+    unlet s:uname
 endif
 
 " Create or update the README (omnils_ files will be regenerated if older than

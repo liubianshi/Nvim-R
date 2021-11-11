@@ -758,7 +758,9 @@ function RDebugJump(fnm, lnum)
     endif
 
     if bufloaded(fname)
-        exe 'sb ' . fname
+        if fname != expand("%")
+            exe 'sb ' . fname
+        endif
         exe ':' . flnum
     endif
 
@@ -770,7 +772,7 @@ function RDebugJump(fnm, lnum)
     if g:R_dbg_jump && !s:rdebugging && type(g:R_external_term) == v:t_number && g:R_external_term == 0
         exe 'sb ' . g:rplugin.R_bufname
         startinsert
-    else
+    elseif bname != expand("%")
         exe 'sb ' . bname
     endif
     let s:rdebugging = 1
@@ -2019,7 +2021,7 @@ function RAction(rcmd, ...)
 endfunction
 
 " render a document with rmarkdown
-function! RMakeRmd(t)
+function RMakeRmd(t)
     if !has_key(g:rplugin, "pdfviewer")
         call RSetPDFViewer()
     endif
@@ -2035,7 +2037,12 @@ function! RMakeRmd(t)
     else
         let rcmd = 'nvim.interlace.rmd("' . expand("%:t") . '", outform = "' . a:t .'", rmddir = "' . rmddir . '"'
     endif
-    let rcmd = rcmd . ', envir = ' . g:R_rmd_environment . ')'
+
+    if g:R_rmarkdown_args == ''
+        let rcmd = rcmd . ', envir = ' . g:R_rmd_environment . ')'
+    else
+        let rcmd = rcmd . ', envir = ' . g:R_rmd_environment . ', ' . substitute(g:R_rmarkdown_args, "'", '"', 'g') . ')'
+    endif
     call g:SendCmdToR(rcmd)
 endfunction
 

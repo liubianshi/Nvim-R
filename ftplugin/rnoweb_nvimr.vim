@@ -3,14 +3,7 @@ if exists("g:disable_r_ftplugin")
     finish
 endif
 
-" Source scripts common to R, Rnoweb, Rhelp and Rdoc:
-exe "source " . substitute(expand("<sfile>:h:h"), ' ', '\ ', 'g') . "/R/common_global.vim"
-if has_key(g:rplugin, "failed")
-    finish
-endif
-
-" Some buffer variables common to R, Rnoweb, Rhelp and Rdoc need to be defined
-" after the global ones:
+" Define some buffer variables common to R, Rnoweb, Rmd, Rrst, Rhelp and rdoc:
 exe "source " . substitute(expand("<sfile>:h:h"), ' ', '\ ', 'g') . "/R/common_buffer.vim"
 
 " Bibliographic completion
@@ -33,24 +26,6 @@ if g:R_rnowebchunk == 1
 endif
 
 exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/rnw_fun.vim"
-call SetPDFdir()
-
-function! s:GetBibFileName()
-    if !exists('b:rplugin_bibf')
-        let b:rplugin_bibf = ''
-    endif
-    let newbibf = join(glob(expand("%:p:h") . '/*.bib', 0, 1), "\x06")
-    if newbibf != b:rplugin_bibf
-        let b:rplugin_bibf = newbibf
-        if IsJobRunning('BibComplete')
-            call JobStdin(g:rplugin.jobs["BibComplete"], "\x04" . expand("%:p") . "\x05" . b:rplugin_bibf . "\n")
-        else
-            let aa = [g:rplugin.py3, g:rplugin.home . '/R/bibtex.py', expand("%:p"), b:rplugin_bibf]
-            let g:rplugin.jobs["BibComplete"] = StartJob(aa, g:rplugin.job_handlers)
-            call RCreateMaps('n', 'ROpenRefFile', 'od', ':call GetBibAttachment()')
-        endif
-    endif
-endfunction
 
 function! s:CompleteEnv(base)
     " List from LaTeX-Box
@@ -180,7 +155,7 @@ function! RnwNonRCompletion(findstart, base)
     endif
 endfunction
 
-function! s:OnCompleteDone()
+function! RnwOnCompleteDone()
     if s:compl_type == 9
         let s:compl_type = 0
         if has_key(v:completed_item, 'word')
@@ -188,19 +163,6 @@ function! s:OnCompleteDone()
         endif
     endif
 endfunction
-
-if g:R_non_r_compl
-    if !has_key(g:rplugin, "py3")
-        call CheckPyBTeX()
-    endif
-    if !has_key(g:rplugin.debug_info, 'BibComplete')
-        " Use RBibComplete if possible
-        call s:GetBibFileName()
-        let b:rplugin_non_r_omnifunc = "RnwNonRCompletion"
-        autocmd BufWritePost <buffer> call s:GetBibFileName()
-        autocmd CompleteDone <buffer> call s:OnCompleteDone()
-    endif
-endif
 
 
 " Pointers to functions whose purposes are the same in rnoweb, rrst, rmd,
@@ -250,12 +212,17 @@ if has("gui_running")
     call MakeRMenu()
 endif
 
-if g:R_synctex && $DISPLAY != "" && g:rplugin.pdfviewer == "evince"
-    let g:rplugin.evince_loop = 0
-    call Run_EvinceBackward()
+call RSourceOtherScripts()
+
+if g:R_non_r_compl
+    call timer_start(1, "CheckPyBTeX")
 endif
 
-call RSourceOtherScripts()
+function! RPDFinit(...)
+    exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/pdf_init.vim"
+endfunction
+
+call timer_start(1, "RPDFinit")
 
 if exists("b:undo_ftplugin")
     let b:undo_ftplugin .= " | unlet! b:IsInRCode b:PreviousRChunk b:NextRChunk b:SendChunkToR"

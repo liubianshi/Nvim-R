@@ -636,19 +636,20 @@ function RLoadHTML(fullpath, browser)
         return
     endif
 
-    let brwsr = a:browser
-    if brwsr == ''
+    if a:browser == ''
         if has('win32') || g:rplugin.is_darwin
-            let brwsr = 'open'
+            let cmd = ['open', a:fullpath]
         else
-            let brwsr = 'xdg-open'
+            let cmd = ['xdg-open', a:fullpath]
         endif
+    else
+        let cmd = split(a:browser) + [a:fullpath]
     endif
 
     if has('nvim')
-        call jobstart([brwsr, a:fullpath], {'detach': 1})
+        call jobstart(cmd, {'detach': 1})
     else
-        call job_start([brwsr, a:fullpath])
+        call job_start(cmd)
     endif
 endfunction
 
@@ -665,44 +666,6 @@ function ROpenDoc(fullpath, browser)
         call RLoadHTML(a:fullpath, a:browser)
     else
         call RWarningMsg("Unknown file type from nvim.interlace: " . a:fullpath)
-    endif
-endfunction
-
-function RSetPDFViewer()
-    let g:rplugin.pdfviewer = tolower(g:R_pdfviewer)
-
-    if g:rplugin.pdfviewer == "zathura"
-        exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/pdf_zathura.vim"
-    elseif g:rplugin.pdfviewer == "evince"
-        exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/pdf_evince.vim"
-    elseif g:rplugin.pdfviewer == "okular"
-        exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/pdf_okular.vim"
-    elseif has("win32") && g:rplugin.pdfviewer == "sumatra"
-        exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/pdf_sumatra.vim"
-    elseif g:rplugin.is_darwin && g:rplugin.pdfviewer == "skim"
-        exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/pdf_skim.vim"
-    elseif g:rplugin.pdfviewer == "qpdfview"
-        exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/pdf_qpdfview.vim"
-    else
-        exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/pdf_generic.vim"
-        if !executable(g:R_pdfviewer)
-            call RWarningMsg("R_pdfviewer (" . g:R_pdfviewer . ") not found.")
-            return
-        endif
-        if g:R_synctex
-            call RWarningMsg('Invalid value for R_pdfviewer: "' . g:R_pdfviewer . '" (SyncTeX will not work)')
-        endif
-    endif
-
-    if !has("win32") && !g:rplugin.is_darwin
-        if executable("wmctrl")
-            let g:rplugin.has_wmctrl = 1
-        else
-            let g:rplugin.has_wmctrl = 0
-            if &filetype == "rnoweb" && g:R_synctex
-                call RWarningMsg("The application wmctrl must be installed to edit Rnoweb effectively.")
-            endif
-        endif
     endif
 endfunction
 
@@ -801,6 +764,7 @@ function RControlMaps()
     " Render script with rmarkdown
     "-------------------------------------
     call RCreateMaps('nvi', 'RMakeRmd',    'kr', ':call RMakeRmd("default")')
+    call RCreateMaps('nvi', 'RMakeAll',    'ka', ':call RMakeRmd("all")')
     call RCreateMaps('nvi', 'RMakePDFK',   'kp', ':call RMakeRmd("pdf_document")')
     call RCreateMaps('nvi', 'RMakePDFKb',  'kl', ':call RMakeRmd("beamer_presentation")')
     call RCreateMaps('nvi', 'RMakeWord',   'kw', ':call RMakeRmd("word_document")')
@@ -1049,6 +1013,8 @@ let g:SendLineToRAndInsertOutput = function('RNotRunning')
 let g:SendMBlockToR = function('RNotRunning')
 let g:SendParagraphToR = function('RNotRunning')
 let g:SendSelectionToR = function('RNotRunning')
+let g:SendCmdToR = function('SendCmdToR_fake')
+
 
 
 "==============================================================================
@@ -1094,9 +1060,6 @@ let $NVIMR_TMPDIR = g:rplugin.tmpdir
 if !isdirectory(g:rplugin.tmpdir)
     call mkdir(g:rplugin.tmpdir, "p", 0700)
 endif
-
-
-let g:rplugin.is_darwin = system("uname") =~ "Darwin"
 
 " Delete options with invalid values
 if exists("g:R_set_omnifunc") && type(g:R_set_omnifunc) != v:t_list
@@ -1173,19 +1136,8 @@ let g:R_user_maps_only   = get(g:, "R_user_maps_only",              0)
 let g:R_latexcmd         = get(g:, "R_latexcmd",          ["default"])
 let g:R_texerr           = get(g:, "R_texerr",                      1)
 let g:R_rmd_environment  = get(g:, "R_rmd_environment",  ".GlobalEnv")
+let g:R_rmarkdown_args   = get(g:, "R_rmarkdown_args",             "")
 let g:R_indent_commented = get(g:, "R_indent_commented",            1)
-
-if g:rplugin.is_darwin
-    let g:R_openpdf = get(g:, "R_openpdf", 1)
-    let g:R_pdfviewer = "skim"
-else
-    let g:R_openpdf = get(g:, "R_openpdf", 2)
-    if has("win32")
-        let g:R_pdfviewer = "sumatra"
-    else
-        let g:R_pdfviewer = get(g:, "R_pdfviewer", "zathura")
-    endif
-endif
 
 if !exists("g:r_indent_ess_comments")
     let g:r_indent_ess_comments = 0
@@ -1237,19 +1189,6 @@ unlet objbrplace
 
 "==============================================================================
 " Check if default mean of communication with R is OK
-"==============================================================================
-
-if g:rplugin.is_darwin
-    if !exists("g:macvim_skim_app_path")
-        let g:macvim_skim_app_path = '/Applications/Skim.app'
-    endif
-else
-    let g:R_applescript = 0
-endif
-
-
-"==============================================================================
-" 
 "==============================================================================
 
 " Minimum width for the Object Browser
@@ -1347,10 +1286,6 @@ if has("gui_running")
     exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/gui_running.vim"
 endif
 
-if !executable(g:rplugin.R)
-    call RWarningMsg("R executable not found: '" . g:rplugin.R . "'")
-endif
-
 autocmd FuncUndefined StartR exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/start_r.vim"
 
 function GlobalRInit(...)
@@ -1370,101 +1305,4 @@ if v:vim_did_enter == 0
     autocmd VimEnter * call PreGlobalRealInit()
 else
     call GlobalRInit()
-endif
-
-
-"==============================================================================
-" Check for the existence of duplicated or obsolete code and deprecated options
-"==============================================================================
-
-" Check if Vim-R-plugin is installed
-if exists("*WaitVimComStart")
-    echohl WarningMsg
-    call input("Please, uninstall Vim-R-plugin before using Nvim-R. [Press <Enter> to continue]")
-    echohl None
-endif
-
-let s:ff = split(globpath(&rtp, "R/functions.vim"))
-if len(s:ff) > 1
-    function WarnDupNvimR()
-        let ff = split(globpath(&rtp, "R/functions.vim"))
-        let msg = ["", "===   W A R N I N G   ===", "",
-                    \ "It seems that Nvim-R is installed in more than one place.",
-                    \ "Please, remove one of them to avoid conflicts.",
-                    \ "Below are the paths of the possibly duplicated installations:", ""]
-        for ffd in ff
-            let msg += ["  " . substitute(ffd, "R/functions.vim", "", "g")]
-        endfor
-        unlet ff
-        let msg  += ["", "Please, uninstall one version of Nvim-R.", ""]
-        exe len(msg) . "split Warning"
-        call setline(1, msg)
-        setlocal bufhidden=wipe
-        setlocal noswapfile
-        set buftype=nofile
-        set nomodified
-        redraw
-    endfunction
-    if v:vim_did_enter
-        call WarnDupNvimR()
-    else
-        autocmd VimEnter * call WarnDupNvimR()
-    endif
-endif
-unlet s:ff
-
-" 2016-08-25
-if exists("g:R_nvimcom_wait")
-    call RWarningMsg("The option R_nvimcom_wait is deprecated. Use R_wait (in seconds) instead.")
-endif
-
-" 2017-02-07
-if exists("g:R_vsplit")
-    call RWarningMsg("The option R_vsplit is deprecated. If necessary, use R_min_editor_width instead.")
-endif
-
-" 2017-03-14
-if exists("g:R_ca_ck")
-    call RWarningMsg("The option R_ca_ck was renamed as R_clear_line. Please, update your vimrc.")
-endif
-
-" 2017-11-15
-if len(g:R_latexcmd[0]) == 1
-    call RWarningMsg("The option R_latexcmd should be a list. Please update your vimrc.")
-endif
-
-" 2017-12-14
-if hasmapto("<Plug>RCompleteArgs", "i")
-    call RWarningMsg("<Plug>RCompleteArgs no longer exists. Please, delete it from your vimrc.")
-else
-    " Delete <C-X><C-A> mapping in RCreateEditMaps()
-    function RCompleteArgs()
-        stopinsert
-        call RWarningMsg("Completion of function arguments are now done by omni completion.")
-        return []
-    endfunction
-endif
-
-" 2018-03-27: Delete this warning before releasing the next version
-if g:R_openhtml == 2
-    call RWarningMsg("Valid values of R_openhtml are only 0 and 1. The value 2 is no longer valid.")
-endif
-
-" 2018-03-31
-if exists('g:R_tmux_split')
-    call RWarningMsg('The option R_tmux_split no longer exists. Please see https://github.com/jalvesaq/Nvim-R/blob/master/R/tmux_split.md')
-endif
-
-" 2020-05-18
-if exists('g:R_complete')
-    call RWarningMsg("The option 'R_complete' no longer exists.")
-endif
-if exists('R_args_in_stline')
-    call RWarningMsg("The option 'R_args_in_stline' no longer exists.")
-endif
-if exists('R_sttline_fmt')
-    call RWarningMsg("The option 'R_sttline_fmt' no longer exists.")
-endif
-if exists('R_show_args')
-    call RWarningMsg("The option 'R_show_args' no longer exists.")
 endif

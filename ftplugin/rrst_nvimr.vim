@@ -3,14 +3,7 @@ if exists("g:disable_r_ftplugin")
     finish
 endif
 
-" Source scripts common to R, Rrst, Rnoweb, Rhelp and Rdoc:
-exe "source " . substitute(expand("<sfile>:h:h"), ' ', '\ ', 'g') . "/R/common_global.vim"
-if has_key(g:rplugin, "failed")
-    finish
-endif
-
-" Some buffer variables common to R, Rrst, Rnoweb, Rhelp and Rdoc need to be
-" defined after the global ones:
+" Define some buffer variables common to R, Rnoweb, Rmd, Rrst, Rhelp and rdoc:
 exe "source " . substitute(expand("<sfile>:h:h"), ' ', '\ ', 'g') . "/R/common_buffer.vim"
 
 function! RrstIsInRCode(vrb)
@@ -201,6 +194,12 @@ endif
 let s:has_rst2pdf = 0
 
 call RSourceOtherScripts()
+
+function! RPDFinit(...)
+    exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/pdf_init.vim"
+endfunction
+
+call timer_start(1, "RPDFinit")
 
 if exists("b:undo_ftplugin")
     let b:undo_ftplugin .= " | unlet! b:IsInRCode b:PreviousRChunk b:NextRChunk b:SendChunkToR"
