@@ -12,15 +12,21 @@
 #include <process.h>
 #include <windows.h>
 #include <time.h>
+#include <inttypes.h>
 HWND NvimHwnd = NULL;
 HWND RConsole = NULL;
+#ifdef _WIN64
+#define PRI_SIZET PRIu64
+#else
+#define PRI_SIZET PRIu32
+#endif
 #else
 #include <stdint.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <pthread.h>
 #include <signal.h>
-#include <sys/time.h>
+#define PRI_SIZET "zu"
 #endif
 
 static char strL[8];
@@ -68,7 +74,7 @@ typedef struct pkg_data_ {
     char *omnils;    // a copy of the omnils_ file
     int nobjs;       // number of objects in the omnils_
     int loaded;      // in libnames_
-    time_t to_build; // name sent to build list
+    int to_build;    // name sent to build list
     int built;       // omnils_ found
     struct pkg_data_ *next;
 } PkgData;
@@ -486,7 +492,7 @@ static void SendToRConsole(char *aString){
         return;
     }
 
-    // FIXME: Delete this code when $WINDOWID is implemented in NeovimQt
+    // The application (such as NeovimQt) might not define $WINDOWID
     if(!NvimHwnd)
         NvimHwnd = GetForegroundWindow();
 
@@ -672,9 +678,7 @@ void Windows_setup()
         NvimHwnd = (HWND)atol(getenv("WINDOWID"));
 #endif
     } else {
-        //fprintf(stderr, "$WINDOWID not defined\n");
-        //fflush(stderr);
-        // FIXME: Delete this code when $WINDOWID is implemented in NeovimQt
+        // The application (such as NeovimQt) might not define $WINDOWID
         NvimHwnd = FindWindow(NULL, "Neovim");
         if(!NvimHwnd){
             NvimHwnd = FindWindow(NULL, "nvim");
@@ -830,7 +834,7 @@ void pkg_delete(PkgData *pd)
     free(pd);
 }
 
-void load_pkg_data(PkgData *pd, int verbose)
+void load_pkg_data(PkgData *pd)
 {
     int size;
     pd->descr = read_pkg_descr(pd->name, pd->version);
@@ -845,7 +849,7 @@ void load_pkg_data(PkgData *pd, int verbose)
     }
 }
 
-PkgData *new_pkg_data(const char *nm, const char *vrsn, int verbose)
+PkgData *new_pkg_data(const char *nm, const char *vrsn)
 {
     char buf[1024];
 
@@ -887,10 +891,10 @@ PkgData *get_pkg(const char *nm)
     return NULL;
 }
 
-void add_pkg(const char *nm, const char *vrsn, int verbose)
+void add_pkg(const char *nm, const char *vrsn)
 {
     PkgData *tmp = pkgList;
-    pkgList = new_pkg_data(nm, vrsn, verbose);
+    pkgList = new_pkg_data(nm, vrsn);
     pkgList->next = tmp;
 }
 
@@ -1091,7 +1095,7 @@ static void build_omnils()
 
     PkgData *pkg = pkgList;
 
-    // It would be easir to call R once for each library, but we will build
+    // It would be easier to call R once for each library, but we will build
     // all cache files at once to avoid the cost of starting R many times.
     p = str_cat(p, "library('nvimcom')\nnvimcom:::nvim.buildomnils(c(");
     int k = 0;
@@ -1102,7 +1106,7 @@ static void build_omnils()
             else
                 snprintf(buf, 63, ", '%s'", pkg->name);
             p = str_cat(p, buf);
-            time(&pkg->to_build);
+            pkg->to_build = 1;
             k++;
         }
         pkg = pkg->next;
@@ -1121,7 +1125,7 @@ static void build_omnils()
         if (pkg->built == 0 && access(pkg->fname, F_OK) == 0)
             pkg->built = 1;
         if (pkg->built && !pkg->omnils)
-            load_pkg_data(pkg, 1);
+            load_pkg_data(pkg);
         pkg = pkg->next;
     }
 
@@ -1189,7 +1193,7 @@ void update_pkg_list()
         if (pkg)
             pkg->loaded = 1;
         else
-            add_pkg(lbnm, vrsn, 1);
+            add_pkg(lbnm, vrsn);
     }
     fclose(flib);
 
@@ -1272,7 +1276,7 @@ int get_list_status(const char *s, int stt)
     return stt;
 }
 
-void toggle_list_status(ListStatus *root, const char *s)
+void toggle_list_status(const char *s)
 {
     ListStatus *p = search(s);
     if(p)
@@ -1488,9 +1492,6 @@ void update_glblenv_buffer()
 
 void omni2ob()
 {
-    if(!glbnv_buffer)
-        return;
-
     FILE *f = fopen(globenv, "w");
     if(!f){
         fprintf(stderr, "Error opening \"%s\" for writing\n", globenv);
@@ -1500,9 +1501,11 @@ void omni2ob()
 
     fprintf(f, ".GlobalEnv | Libraries\n\n");
 
-    const char *s = glbnv_buffer;
-    while(*s)
-        s = write_ob_line(s, "", "", 0, f);
+    if (glbnv_buffer) {
+        const char *s = glbnv_buffer;
+        while(*s)
+            s = write_ob_line(s, "", "", 0, f);
+    }
 
     fclose(f);
     if(auto_obbr){
@@ -1626,10 +1629,10 @@ int count_twice(const char *b1, const char *b2, const char ch)
 {
     int n1 = 0;
     int n2 = 0;
-    for(int i = 0; i < strlen(b1); i++)
+    for(unsigned long i = 0; i < strlen(b1); i++)
         if(b1[i] == ch)
             n1++;
-    for(int i = 0; i < strlen(b2); i++)
+    for(unsigned long i = 0; i < strlen(b2); i++)
         if(b2[i] == ch)
             n2++;
     return n1 == n2;
@@ -1860,7 +1863,7 @@ void complete(const char *id, const char *base, const char *funcnm)
         }
         if(base[0] == 0){
             // base will be empty if completing only function arguments
-            printf("\005%lu\005call SetComplMenu(%s, [%s])\n", strlen(compl_buffer) + strlen(id) + 23, id, compl_buffer);
+            printf("\005%" PRI_SIZET "\005call SetComplMenu(%s, [%s])\n", strlen(compl_buffer) + strlen(id) + 23, id, compl_buffer);
             fflush(stdout);
             return;
         }
@@ -1876,7 +1879,7 @@ void complete(const char *id, const char *base, const char *funcnm)
         pd = pd->next;
     }
 
-    printf("\005%lu\005call SetComplMenu(%s, [%s])\n", strlen(compl_buffer) + strlen(id) + 23, id, compl_buffer);
+    printf("\005%" PRI_SIZET "\005call SetComplMenu(%s, [%s])\n", strlen(compl_buffer) + strlen(id) + 23, id, compl_buffer);
     fflush(stdout);
 }
 
@@ -1951,7 +1954,7 @@ int main(int argc, char **argv){
                         msg++;
                         t = *msg;
                         msg++;
-                        toggle_list_status(listTree, msg);
+                        toggle_list_status(msg);
                         if(t == 'G')
                             omni2ob();
                         else

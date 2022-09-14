@@ -27,6 +27,11 @@ function StartR_ExternalTerm(rcmd)
                         \ "set terminal-overrides 'rxvt*:smcup@:rmcup@'" ]
         endif
 
+        if s:term_name == "alacritty"
+            let cnflines = cnflines + [
+                        \ "set terminal-overrides 'alacritty:smcup@:rmcup@'" ]
+        endif
+
         call writefile(cnflines, g:rplugin.tmpdir . "/tmux.conf")
         call AddForDeletion(g:rplugin.tmpdir . "/tmux.conf")
         let tmuxcnf = '-f "' . g:rplugin.tmpdir . "/tmux.conf" . '"'
@@ -116,7 +121,7 @@ function SendCmdToR_Term(...)
     if a:0 == 2 && a:2 == 0
         let scmd = "tmux -L NvimR set-buffer '" . str . "' && tmux -L NvimR paste-buffer -t " . g:rplugin.tmuxsname . '.' . TmuxOption("pane-base-index", "window")
     else
-        let scmd = "tmux -L NvimR set-buffer '" . str . "\<C-M>' && tmux -L NvimR paste-buffer -t " . g:rplugin.tmuxsname . '.' . TmuxOption("pane-base-index", "window")
+        let scmd = "tmux -L NvimR set-buffer '" . str . "\<CR>' && tmux -L NvimR paste-buffer -t " . g:rplugin.tmuxsname . '.' . TmuxOption("pane-base-index", "window")
     endif
     let rlog = system(scmd)
     if v:shell_error
@@ -171,7 +176,7 @@ endif
 
 if !exists("s:term_name")
     let s:terminals = ['gnome-terminal', 'konsole', 'xfce4-terminal', 'Eterm',
-                \ 'rxvt', 'urxvt', 'aterm', 'roxterm', 'lxterminal', 'xterm']
+                \ 'rxvt', 'urxvt', 'aterm', 'roxterm', 'lxterminal', 'alacritty', 'xterm']
     for s:term in s:terminals
         if executable(s:term)
             let s:term_name = s:term
@@ -188,7 +193,7 @@ if !exists("s:term_name")
     finish
 endif
 
-if s:term_name =~ '^\(gnome-terminal\|xfce4-terminal\|roxterm\|Eterm\|aterm\|lxterminal\|rxvt\|urxvt\)$'
+if s:term_name =~ '^\(gnome-terminal\|xfce4-terminal\|roxterm\|Eterm\|aterm\|lxterminal\|rxvt\|urxvt\|alacritty\)$'
     let s:term_cmd = s:term_name . " --title R"
 elseif s:term_name =~ '^\(xterm\|uxterm\|lxterm\)$'
     let s:term_cmd = s:term_name . " -title R"

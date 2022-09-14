@@ -15,6 +15,7 @@ function CheckNvimcomVersion()
     " Get version of current source code
     let flines = readfile(g:rplugin.home . "/R/nvimcom/DESCRIPTION")
     let s:required_nvimcom = substitute(flines[1], "Version: ", "", "")
+    let g:rplugin.debug_info['Required nvimcom'] = s:required_nvimcom
 
     if g:rplugin.nvimcom_info['home'] == ""
         let neednew = 1
@@ -26,12 +27,13 @@ function CheckNvimcomVersion()
         else
             let ndesc = readfile(g:rplugin.nvimcom_info['home'] . "/nvimcom/DESCRIPTION")
             let nvers = substitute(ndesc[1], "Version: ", "", "")
+            let g:rplugin.debug_info['Installed nvimcom'] = nvers
             if nvers != s:required_nvimcom
                 let neednew = 1
-                let g:rplugin.debug_info['Why build nvimcom'] = 'Version mismatch'
+                let g:rplugin.debug_info['Why build nvimcom'] = 'Nvimcom version mismatch'
             else
                 " Nvimcom is up to date. Check if R version changed.
-                let rversion = system(g:rplugin.Rcmd . ' --version')
+                silent let rversion = system(g:rplugin.Rcmd . ' --version')
                 let rversion = substitute(rversion, '.*R version \(\S\{-}\) .*', '\1', '')
                 if rversion < '4.0.0'
                     call RWarningMsg("Nvim-R requires R >= 4.0.0")
@@ -39,7 +41,7 @@ function CheckNvimcomVersion()
                 let g:rplugin.debug_info['R_version'] = rversion
                 if g:rplugin.nvimcom_info['Rversion'] != rversion
                     let neednew = 1
-                    let g:rplugin.debug_info['Why build nvimcom'] = 'Other R version'
+                    let g:rplugin.debug_info['Why build nvimcom'] = 'R version mismatch'
                 endif
             endif
         endif
@@ -73,9 +75,10 @@ function CheckNvimcomVersion()
                     \ '    sep = "\n")',
                     \ 'sink()' ]
         call writefile(rcode, g:rplugin.tmpdir . '/nvimcom_path.R')
-        let g:rplugin.debug_info['.libPaths()'] = system(g:rplugin.Rcmd . ' --no-restore --no-save --slave -f "' . g:rplugin.tmpdir . '/nvimcom_path.R"')
+        silent let g:rplugin.debug_info['.libPaths()'] = system(g:rplugin.Rcmd . ' --no-restore --no-save --slave -f "' . g:rplugin.tmpdir . '/nvimcom_path.R"')
         if v:shell_error
-            call RWarningMsg(g:rplugin.debug_info['.libPaths()'])
+            call RWarningMsg('Error trying to run .libPaths(): ' .
+                        \ substitute(g:rplugin.debug_info['.libPaths()'], "\n", " ", "g"))
             if has("win32")
                 call UnsetRHome()
             endif
@@ -241,9 +244,9 @@ function StartNClientServer()
     " numbers and we use it to set both $NVIMR_ID and $NVIMR_SECRET
     if $NVIMR_ID == ""
         if has('nvim')
-            let randstr = system(['randint2'])
+            silent let randstr = system(['randint2'])
         else
-            let randstr = system('randint2')
+            silent let randstr = system('randint2')
         endif
         if v:shell_error || strlen(randstr) < 8 || (strlen(randstr) > 0 && randstr[0] !~ '[0-9]')
             call RWarningMsg('Using insecure communication with R due to failure to get random numbers: '
@@ -283,8 +286,6 @@ function StartNClientServer()
     unlet $NVIMR_OPENDF
     unlet $NVIMR_OPENLS
     unlet $NVIMR_OBJBR_ALLNAMES
-
-    call RSetDefaultPkg()
 endfunction
 
 " This function is called by nclientserver when its server binds to a specific port.
@@ -454,10 +455,10 @@ if exists("*WaitVimComStart")
     echohl None
 endif
 
-let s:ff = split(globpath(&rtp, "R/functions.vim"))
+let s:ff = split(globpath(&rtp, "R/functions.vim"), '\n')
 if len(s:ff) > 1
     function WarnDupNvimR()
-        let ff = split(globpath(&rtp, "R/functions.vim"))
+        let ff = split(globpath(&rtp, "R/functions.vim"), '\n')
         let msg = ["", "===   W A R N I N G   ===", "",
                     \ "It seems that Nvim-R is installed in more than one place.",
                     \ "Please, remove one of them to avoid conflicts.",
@@ -513,11 +514,6 @@ else
         call RWarningMsg("Completion of function arguments are now done by omni completion.")
         return []
     endfunction
-endif
-
-" 2018-03-27: Delete this warning before releasing the next version
-if g:R_openhtml == 2
-    call RWarningMsg("Valid values of R_openhtml are only 0 and 1. The value 2 is no longer valid.")
 endif
 
 " 2018-03-31

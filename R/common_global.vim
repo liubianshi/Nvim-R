@@ -72,7 +72,17 @@ function FormatTxt(text, splt, jn, maxl)
 endfunction
 
 let s:float_warn = 0
+let g:rplugin.has_notify = v:false
+if has('nvim')
+    lua if pcall(require, 'notify') then vim.cmd('let g:rplugin.has_notify = v:true') end
+endif
 function RFloatWarn(wmsg)
+    if g:rplugin.has_notify
+        let qmsg = substitute(a:wmsg, "'", "\\\\'", "g")
+        exe "lua require('notify')('" . qmsg . "', 'warn', {title = 'Nvim-R'})"
+        return
+    endif
+
     " Close any float warning eventually still open
     let id = win_id2win(s:float_warn)
     if id > 0
@@ -123,7 +133,7 @@ function RWarningMsg(wmsg)
         exe 'autocmd VimEnter * call RWarningMsg("' . escape(a:wmsg, '"') . '")'
         return
     endif
-    if mode() == 'i' && (has('nvim-0.4.3') || has('patch-8.1.1705'))
+    if mode() == 'i' && (has('nvim-0.5.0') || has('patch-8.2.84'))
         call RFloatWarn(a:wmsg)
     endif
     echohl WarningMsg
@@ -137,17 +147,17 @@ endfunction
 "==============================================================================
 
 if has("nvim")
-    if !has("nvim-0.4.3")
-        call RWarningMsg("Nvim-R requires Neovim >= 0.4.3.")
+    if !has("nvim-0.5.0")
+        call RWarningMsg("Nvim-R requires Neovim >= 0.5.0.")
         let g:rplugin.failed = 1
         finish
     endif
-elseif v:version < "801"
-    call RWarningMsg("Nvim-R requires either Neovim >= 0.4.3 or Vim >= 8.1.1705")
+elseif v:version < "802"
+    call RWarningMsg("Nvim-R requires either Neovim >= 0.5.0 or Vim >= 8.2.84")
     let g:rplugin.failed = 1
     finish
-elseif !has("channel") || !has("job") || !has('patch-8.1.1705')
-    call RWarningMsg("Nvim-R requires either Neovim >= 0.4.3 or Vim >= 8.1.1705\nIf using Vim, it must have been compiled with both +channel and +job features.\n")
+elseif !has("channel") || !has("job") || !has('patch-8.2.84')
+    call RWarningMsg("Nvim-R requires either Neovim >= 0.5.0 or Vim >= 8.2.84\nIf using Vim, it must have been compiled with both +channel and +job features.\n")
     let g:rplugin.failed = 1
     finish
 endif
@@ -239,7 +249,7 @@ function RSimpleCommentLine(mode, what)
     let cstr = g:R_rcomment_string
     if (&filetype == "rnoweb"|| &filetype == "rhelp") && IsLineInRCode(0, fline) == 0
         let cstr = "%"
-    elseif (&filetype == "rmd" || &filetype == "rrst") && IsLineInRCode(0, fline) == 0
+    elseif (&filetype == "rmd" || &filetype == "quarto" || &filetype == "rrst") && IsLineInRCode(0, fline) == 0
         return
     endif
 
@@ -294,7 +304,7 @@ function RComment(mode)
     endif
     if (&filetype == "rnoweb" || &filetype == "rhelp") && IsLineInRCode(0, fline) == 0
         let cmt = "%"
-    elseif (&filetype == "rmd" || &filetype == "rrst") && IsLineInRCode(0, fline) == 0
+    elseif (&filetype == "rmd" || &filetype == "quarto" || &filetype == "rrst") && IsLineInRCode(0, fline) == 0
         return
     endif
 
@@ -445,19 +455,6 @@ function IsSendCmdToRFake()
     return 0
 endfunction
 
-" Required to make R load nvimcom without the need of the user including
-" library(nvimcom) in his or her ~/.Rprofile.
-function RSetDefaultPkg()
-    if $R_DEFAULT_PACKAGES == ""
-        let $R_DEFAULT_PACKAGES = "datasets,utils,grDevices,graphics,stats,methods,nvimcom"
-    elseif $R_DEFAULT_PACKAGES !~ "nvimcom"
-        let $R_DEFAULT_PACKAGES .= ",nvimcom"
-    endif
-    if exists("g:RStudio_cmd") && $R_DEFAULT_PACKAGES !~ "rstudioapi"
-        let $R_DEFAULT_PACKAGES .= ",rstudioapi"
-    endif
-endfunction
-
 function SendCmdToR_NotYet(...)
     call RWarningMsg("Not ready yet")
     return 0
@@ -483,12 +480,13 @@ function RGetKeyword(...)
         let i -= 1
     endwhile
     " Go to the beginning of the word
-    while i > 0 && line[i-1] =~ '\k\|@\|\$\|\:\|_\|\.'
+    " See https://en.wikipedia.org/wiki/UTF-8#Codepage_layout
+    while i > 0 && line[i-1] =~ '\k\|@\|\$\|\:\|_\|\.' || (line[i-1] > "\x80" && line[i-1] < "\xf5")
         let i -= 1
     endwhile
     " Go to the end of the word
     let j = i
-    while line[j] =~ '\k\|@\|\$\|\:\|_\|\.'
+    while line[j] =~ '\k\|@\|\$\|\:\|_\|\.' || (line[j] > "\x80" && line[j] < "\xf5")
         let j += 1
     endwhile
     let rkeyword = strpart(line, i, j - i)
@@ -612,14 +610,14 @@ function RGetFirstObj(rkeyword, ...)
 endfunction
 
 function ROpenPDF(fullpath)
+    if g:R_openpdf == 0
+        return
+    endif
+
     if a:fullpath == "Get Master"
         let fpath = SyncTeX_GetMaster() . ".pdf"
         let fpath = b:rplugin_pdfdir . "/" . substitute(fpath, ".*/", "", "")
         call ROpenPDF(fpath)
-        return
-    endif
-
-    if g:R_openpdf == 0
         return
     endif
 
@@ -654,11 +652,14 @@ function RLoadHTML(fullpath, browser)
 endfunction
 
 function ROpenDoc(fullpath, browser)
+    if a:fullpath == ""
+        return
+    endif
     if !filereadable(a:fullpath)
         call RWarningMsg('The file "' . a:fullpath . '" does not exist.')
         return
     endif
-    if a:fullpath =~ '.odt$'
+    if a:fullpath =~ '.odt$' || a:fullpath =~ '.docx$'
         call system('lowriter ' . a:fullpath . ' &')
     elseif a:fullpath =~ '.pdf$'
         call ROpenPDF(a:fullpath)
@@ -765,11 +766,19 @@ function RControlMaps()
     "-------------------------------------
     call RCreateMaps('nvi', 'RMakeRmd',    'kr', ':call RMakeRmd("default")')
     call RCreateMaps('nvi', 'RMakeAll',    'ka', ':call RMakeRmd("all")')
-    call RCreateMaps('nvi', 'RMakePDFK',   'kp', ':call RMakeRmd("pdf_document")')
-    call RCreateMaps('nvi', 'RMakePDFKb',  'kl', ':call RMakeRmd("beamer_presentation")')
-    call RCreateMaps('nvi', 'RMakeWord',   'kw', ':call RMakeRmd("word_document")')
-    call RCreateMaps('nvi', 'RMakeHTML',   'kh', ':call RMakeRmd("html_document")')
-    call RCreateMaps('nvi', 'RMakeODT',    'ko', ':call RMakeRmd("odt_document")')
+    if &filetype == "quarto"
+        call RCreateMaps('nvi', 'RMakePDFK',   'kp', ':call RMakeRmd("pdf")')
+        call RCreateMaps('nvi', 'RMakePDFKb',  'kl', ':call RMakeRmd("beamer")')
+        call RCreateMaps('nvi', 'RMakeWord',   'kw', ':call RMakeRmd("docx")')
+        call RCreateMaps('nvi', 'RMakeHTML',   'kh', ':call RMakeRmd("html")')
+        call RCreateMaps('nvi', 'RMakeODT',    'ko', ':call RMakeRmd("odt")')
+    else
+        call RCreateMaps('nvi', 'RMakePDFK',   'kp', ':call RMakeRmd("pdf_document")')
+        call RCreateMaps('nvi', 'RMakePDFKb',  'kl', ':call RMakeRmd("beamer_presentation")')
+        call RCreateMaps('nvi', 'RMakeWord',   'kw', ':call RMakeRmd("word_document")')
+        call RCreateMaps('nvi', 'RMakeHTML',   'kh', ':call RMakeRmd("html_document")')
+        call RCreateMaps('nvi', 'RMakeODT',    'ko', ':call RMakeRmd("odt_document")')
+    endif
 endfunction
 
 function RCreateStartMaps()
@@ -837,7 +846,7 @@ function RCreateSendMaps()
     call RCreateMaps('ni', 'RDSendParagraph',  'pd', ':call SendParagraphToR("silent", "down")')
     call RCreateMaps('ni', 'REDSendParagraph', 'pa', ':call SendParagraphToR("echo", "down")')
 
-    if &filetype == "rnoweb" || &filetype == "rmd" || &filetype == "rrst"
+    if &filetype == "rnoweb" || &filetype == "rmd" || &filetype == "quarto" || &filetype == "rrst"
         call RCreateMaps('ni', 'RSendChunkFH', 'ch', ':call SendFHChunkToR()')
     endif
 
@@ -867,7 +876,7 @@ function RBufEnter()
     if has("gui_running")
         if &filetype != g:rplugin.lastft
             call UnMakeRMenu()
-            if &filetype == "r" || &filetype == "rnoweb" || &filetype == "rmd" || &filetype == "rrst" || &filetype == "rdoc" || &filetype == "rbrowser" || &filetype == "rhelp"
+            if &filetype == "r" || &filetype == "rnoweb" || &filetype == "rmd" || &filetype == "quarto" || &filetype == "rrst" || &filetype == "rdoc" || &filetype == "rbrowser" || &filetype == "rhelp"
                 if &filetype == "rbrowser"
                     call MakeRBrowserMenu()
                 else
@@ -879,7 +888,7 @@ function RBufEnter()
             let g:rplugin.lastft = &filetype
         endif
     endif
-    if &filetype == "r" || &filetype == "rnoweb" || &filetype == "rmd" || &filetype == "rrst" || &filetype == "rhelp"
+    if &filetype == "r" || &filetype == "rnoweb" || &filetype == "rmd" || &filetype == "quarto" || &filetype == "rrst" || &filetype == "rhelp"
         let g:rplugin.rscript_name = bufname("%")
     endif
 endfunction
@@ -1092,7 +1101,7 @@ let g:R_disable_cmds      = get(g:, "R_disable_cmds",    [''])
 let g:R_openhtml          = get(g:, "R_openhtml",           1)
 let g:R_hi_fun_paren      = get(g:, "R_hi_fun_paren",       0)
 let g:R_hi_fun_globenv    = get(g:, "R_hi_fun_globenv",     0)
-let g:R_set_omnifunc      = get(g:, "R_set_omnifunc", ["r",  "rmd", "rnoweb", "rhelp", "rrst"])
+let g:R_set_omnifunc      = get(g:, "R_set_omnifunc", ["r",  "rmd", "quarto", "rnoweb", "rhelp", "rrst"])
 let g:R_auto_omni         = get(g:, "R_auto_omni",    [])
 
 if exists(":terminal") != 2

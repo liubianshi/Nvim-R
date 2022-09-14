@@ -31,7 +31,7 @@ augroup RBuffer
 augroup END
 
 let b:rplugin_knitr_pattern = ''
-if &filetype == "rnoweb" || &filetype == "rrst" || &filetype == "rmd"
+if &filetype == "rnoweb" || &filetype == "rrst" || &filetype == "rmd" || &filetype == "quarto"
     if &omnifunc == "CompleteR"
         let b:rplugin_non_r_omnifunc = ""
     else
@@ -39,17 +39,6 @@ if &filetype == "rnoweb" || &filetype == "rrst" || &filetype == "rmd"
     endif
 endif
 
-
-" Set the name of the Object Browser caption if not set yet
-let s:tnr = tabpagenr()
-if !exists("b:objbrtitle")
-    if s:tnr == 1
-        let b:objbrtitle = "Object_Browser"
-    else
-        let b:objbrtitle = "Object_Browser" . s:tnr
-    endif
-    unlet s:tnr
-endif
 
 let g:rplugin.lastft = &filetype
 

@@ -39,6 +39,7 @@ static int debugging;
 LibExtern SEXP  R_SrcfileSymbol; // Defn.h
 static void SrcrefInfo();
 #endif
+static int debug_r;
 
 static char nvimcom_version[32];
 
@@ -155,7 +156,7 @@ static void nvimcom_nvimclient(const char *msg, char *port)
     struct addrinfo *result, *rp;
     char portstr[16];
     int s, a;
-    size_t len;
+    ssize_t len;
     int srvport = atoi(port);
 
     if(verbose > 2)
@@ -205,7 +206,7 @@ static void nvimcom_nvimclient(const char *msg, char *port)
 
     char finalmsg[1024];
     nvimcom_set_finalmsg(msg, finalmsg);
-    len = strlen(finalmsg);
+    len = (ssize_t)strlen(finalmsg);
     if (write(s, finalmsg, len) != len) {
         REprintf("Error: partial/failed write\n");
         return;
@@ -259,10 +260,10 @@ static void nvimcom_nvimclient(const char *msg, char *port)
 }
 #endif
 
-static void nvimcom_squo(const char *buf, char *buf2)
+static void nvimcom_squo(const char *buf, char *buf2, int bsize)
 {
     int i = 0, j = 0;
-    while(j < 80){
+    while(j < bsize){
         if(buf[i] == '\''){
             buf2[j] = '\'';
             j++;
@@ -276,6 +277,37 @@ static void nvimcom_squo(const char *buf, char *buf2)
         i++;
         j++;
     }
+}
+
+static void nvimcom_backtick(const char *b1, char *b2)
+{
+    int i = 0, j = 0;
+    while (i < 511 && b1[i] != '$' && b1[i] != '@' && b1[i] != 0) {
+        if (b1[i] == '[' && b1[i+1] == '[') {
+            b2[j] = '[';
+            i++; j++;
+            b2[j] = '[';
+            i++; j++;
+        } else {
+            b2[j] = '`';
+            j++;
+        }
+        while (i < 511 && b1[i] != '$' && b1[i] != '@' && b1[i] != '[' && b1[i] != 0) {
+            b2[j] = b1[i];
+            i++; j++;
+        }
+        if (b1[i-1] != ']') {
+            b2[j] = '`';
+            j++;
+        }
+        if (b1[i] == 0)
+            break;
+        if (b1[i] != '[') {
+            b2[j] = b1[i];
+            i++; j++;
+        }
+    }
+    b2[j] = 0;
 }
 
 void nvimcom_msg_to_nvim(char **cmd)
@@ -349,6 +381,7 @@ static char *nvimcom_glbnv_line(SEXP *x, const char *xname, const char *curenv, 
     ParseStatus status, status2;
     int er = 0;
     char buf[576];
+    char bbuf[512];
 
     if((strlen(glbnvbuf2 + lastglbnvbsz)) > 31744)
         p = nvimcom_grow_buffers();
@@ -358,7 +391,7 @@ static char *nvimcom_glbnv_line(SEXP *x, const char *xname, const char *curenv, 
     p = nvimcom_strcat(p, ebuf);
 
     if(Rf_isLogical(*x)){
-        p = nvimcom_strcat(p, "\006\%\006");
+        p = nvimcom_strcat(p, "\006%\006");
     } else if(Rf_isNumeric(*x)){
         p = nvimcom_strcat(p, "\006{\006");
     } else if(Rf_isFactor(*x)){
@@ -437,10 +470,9 @@ static char *nvimcom_glbnv_line(SEXP *x, const char *xname, const char *curenv, 
             snprintf(newenv, 575, "%s%s$", curenvB, xname);
 
         if(xgroup == 4){
-            if(xname[0] >= '0' && xname[0] <= '9')
-                snprintf(buf, 575, "slotNames(%s`%s`)", curenvB, xname);
-            else
-                snprintf(buf, 575, "slotNames(%s%s)", curenvB, xname);
+            snprintf(buf, 575, "%s%s", curenvB, xname);
+            nvimcom_backtick(buf, bbuf);
+            snprintf(buf, 575, "slotNames(%s)", bbuf);
             PROTECT(cmdSexp = allocVector(STRSXP, 1));
             SET_STRING_ELT(cmdSexp, 0, mkChar(buf));
             PROTECT(cmdexpr = R_ParseVector(cmdSexp, -1, &status, R_NilValue));
@@ -461,12 +493,10 @@ static char *nvimcom_glbnv_line(SEXP *x, const char *xname, const char *curenv, 
                     if(len > 0){
                         for(int i = 0; i < len; i++){
                             ename = CHAR(STRING_ELT(ans, i));
-                            if(ename[0] >= '0' && ename[0] <= '9')
-                                snprintf(buf, 575, "%s%s@`%s`", curenvB, xname, ename);
-                            else
-                                snprintf(buf, 575, "%s%s@%s", curenvB, xname, ename);
+                            snprintf(buf, 575, "%s%s@%s", curenvB, xname, ename);
+                            nvimcom_backtick(buf, bbuf);
                             PROTECT(cmdSexp2 = allocVector(STRSXP, 1));
-                            SET_STRING_ELT(cmdSexp2, 0, mkChar(buf));
+                            SET_STRING_ELT(cmdSexp2, 0, mkChar(bbuf));
                             PROTECT(cmdexpr2 = R_ParseVector(cmdSexp2, -1, &status2, R_NilValue));
                             if (status2 != PARSE_OK) {
                                 REprintf("nvimcom error: invalid code \"%s@%s\"\n", xname, ename);
@@ -549,12 +579,17 @@ static void nvimcom_globalenv_list()
     PROTECT(envVarsSEXP = R_lsInternal(R_GlobalEnv, allnames));
     for(int i = 0; i < Rf_length(envVarsSEXP); i++){
         varName = CHAR(STRING_ELT(envVarsSEXP, i));
-        PROTECT(varSEXP = Rf_findVar(Rf_install(varName), R_GlobalEnv));
-        if (varSEXP != R_UnboundValue) // should never be unbound
-        {
+        if (R_BindingIsActive(Rf_install(varName), R_GlobalEnv)) {
+            // See: https://github.com/jalvesaq/Nvim-R/issues/686
+            PROTECT(varSEXP = R_ActiveBindingFunction(Rf_install(varName), R_GlobalEnv));
+        } else {
+            PROTECT(varSEXP = Rf_findVar(Rf_install(varName), R_GlobalEnv));
+        }
+        if (varSEXP != R_UnboundValue) {
+            // should never be unbound
             p = nvimcom_glbnv_line(&varSEXP, varName, "", p, 0);
         } else {
-            REprintf("nvimcom_globalenv_list: Unexpected R_UnboundValue returned from R_lsInternal.\n");
+            REprintf("nvimcom_globalenv_list: Unexpected R_UnboundValue.\n");
         }
         UNPROTECT(1);
     }
@@ -611,7 +646,7 @@ static void nvimcom_eval_expr(const char *buf)
     PROTECT(cmdexpr = R_ParseVector(cmdSexp, -1, &status, R_NilValue));
 
     char buf2[80];
-    nvimcom_squo(buf, buf2);
+    nvimcom_squo(buf, buf2, 80);
     if (status != PARSE_OK && verbose > 1) {
         strcpy(rep, "RWarningMsg('Invalid command: ");
         strncat(rep, buf2, 80);
@@ -743,8 +778,6 @@ static Rboolean nvimcom_task(SEXP expr, SEXP value, Rboolean succeeded,
 
 #ifndef WIN32
 static void nvimcom_exec(void *nothing){
-    if(nothing)
-        REprintf("nvimcom_exec received non NULL data\n");
     if(*flag_eval){
         nvimcom_eval_expr(flag_eval);
         *flag_eval = 0;
@@ -794,10 +827,15 @@ static void SrcrefInfo()
         if (TYPEOF(srcfile) == ENVSXP) {
             SEXP filename = findVar(install("filename"), srcfile);
             if (isString(filename) && length(filename)) {
-                char buf[128];
-                snprintf(buf, 127, "RDebugJump('%s', %d)",
-                        CHAR(STRING_ELT(filename, 0)), asInteger(R_Srcref));
+                size_t slen = strlen(CHAR(STRING_ELT(filename, 0)));
+                char *buf = calloc(sizeof(char), (2 * slen + 32));
+                char *buf2 = calloc(sizeof(char), (2 * slen + 32));
+                snprintf(buf, 2 * slen + 1, "%s", CHAR(STRING_ELT(filename, 0)));
+                nvimcom_squo(buf, buf2, 2 * slen + 32);
+                snprintf(buf, 2 * slen + 31, "RDebugJump('%s', %d)", buf2, asInteger(R_Srcref));
                 nvimcom_nvimclient(buf, edsrvr);
+                free(buf);
+                free(buf2);
             }
         }
     }
@@ -1110,12 +1148,13 @@ static void nvimcom_server_thread(void *arg)
 #endif
 
 
-void nvimcom_Start(int *vrb, int *anm, int *swd, int *age, char **vcv, char **pth, char **rinfo)
+void nvimcom_Start(int *vrb, int *anm, int *swd, int *age, int *dbg, char **vcv, char **pth, char **rinfo)
 {
     verbose = *vrb;
     allnames = *anm;
     setwidth = *swd;
     autoglbenv = *age;
+    debug_r = *dbg;
 
     R_PID = getpid();
     strncpy(nvimcom_version, *vcv, 31);
@@ -1182,8 +1221,10 @@ void nvimcom_Start(int *vrb, int *anm, int *swd, int *age, char **vcv, char **pt
 #ifdef WIN32
         r_is_busy = 0;
 #else
-        save_ptr_R_ReadConsole = ptr_R_ReadConsole;
-        ptr_R_ReadConsole = nvimcom_read_console;
+        if (debug_r) {
+            save_ptr_R_ReadConsole = ptr_R_ReadConsole;
+            ptr_R_ReadConsole = nvimcom_read_console;
+        }
 #endif
 
     }
@@ -1205,7 +1246,8 @@ void nvimcom_Stop()
         closesocket(sfd);
         WSACleanup();
 #else
-        ptr_R_ReadConsole = save_ptr_R_ReadConsole;
+        if (debug_r)
+            ptr_R_ReadConsole = save_ptr_R_ReadConsole;
         close(sfd);
         nvimcom_nvimclient("STOP >>> Now <<< !!!", myport);
         pthread_join(tid, NULL);

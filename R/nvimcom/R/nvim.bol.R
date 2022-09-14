@@ -247,7 +247,7 @@ nvim.omni.line <- function(x, envir, printenv, curlevel, maxlevel = 0) {
                 }
             } else {
                 info <- nvim.getInfo(printenv, x)
-                if(info == "\006\006"){
+                if(length(info) > 0 && info == "\006\006"){
                     xattr <- try(attr(xx, "label"), silent = TRUE)
                     if(!inherits(xattr, "try-error"))
                         info <- paste0("\006\006", CleanOmniLine(xattr))
@@ -383,7 +383,7 @@ GetFunDescription <- function(pkg)
         als$name[[i]] <- cbind(als$alias[[i]], als$name[[i]])
     als <- do.call("rbind", als$name)
     if(nrow(als) > 1){
-        als <- als[complete.cases(als), ]
+        als <- als[stats::complete.cases(als), ]
         als <- als[!duplicated(als[, 2]), ]
     }
     colnames(als) <- c("alias", "name")

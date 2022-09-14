@@ -74,7 +74,13 @@ function StartR(whatr)
     call AddForDeletion(g:rplugin.tmpdir . "/globenv_" . $NVIMR_ID)
     call AddForDeletion(g:rplugin.tmpdir . "/liblist_" . $NVIMR_ID)
     call AddForDeletion(g:rplugin.tmpdir . "/nvimbol_finished")
-    call AddForDeletion(g:rplugin.tmpdir . "/start_options.R")
+
+    if &encoding == "utf-8"
+        call AddForDeletion(g:rplugin.tmpdir . "/start_options_utf8.R")
+    else
+        call AddForDeletion(g:rplugin.tmpdir . "/start_options.R")
+    endif
+
     call AddForDeletion(g:rplugin.tmpdir . "/args_for_completion")
 
     " Reset R_DEFAULT_PACKAGES to its original value (see https://github.com/jalvesaq/Nvim-R/issues/554):
@@ -94,6 +100,11 @@ function StartR(whatr)
         let start_options += ['options(nvimcom.autoglbenv = TRUE)']
     else
         let start_options += ['options(nvimcom.autoglbenv = FALSE)']
+    endif
+    if g:R_debug
+        let start_options += ['options(nvimcom.debug_r = TRUE)']
+    else
+        let start_options += ['options(nvimcom.debug_r = FALSE)']
     endif
     if exists('g:R_setwidth') && g:R_setwidth == 2
         let start_options += ['options(nvimcom.setwidth = TRUE)']
@@ -129,19 +140,26 @@ function StartR(whatr)
         " `rwd` will not be a real directory if editing a file on the internet
         " with netrw plugin
         if isdirectory(rwd)
-            if has("win32") && &encoding == "utf-8"
-                let start_options += ['.nvim.rwd <- "' . rwd . '"']
-                let start_options += ['Encoding(.nvim.rwd) <- "UTF-8"']
-                let start_options += ['setwd(.nvim.rwd)']
-                let start_options += ['rm(.nvim.rwd)']
-            else
-                let start_options += ['setwd("' . rwd . '")']
-            endif
+            let start_options += ['setwd("' . rwd . '")']
         endif
     endif
-    call writefile(start_options, g:rplugin.tmpdir . "/start_options.R")
+
+    if &encoding == "utf-8"
+        call writefile(start_options, g:rplugin.tmpdir . "/start_options_utf8.R")
+    else
+        call writefile(start_options, g:rplugin.tmpdir . "/start_options.R")
+    endif
+
+    " Required to make R load nvimcom without the need of the user including
+    " library(nvimcom) in his or her ~/.Rprofile.
+    if $R_DEFAULT_PACKAGES == ""
+        let $R_DEFAULT_PACKAGES = "datasets,utils,grDevices,graphics,stats,methods,nvimcom"
+    elseif $R_DEFAULT_PACKAGES !~ "nvimcom"
+        let $R_DEFAULT_PACKAGES .= ",nvimcom"
+    endif
 
     if exists("g:RStudio_cmd")
+        let $R_DEFAULT_PACKAGES .= ",rstudioapi"
         call StartRStudio()
         return
     endif
@@ -216,9 +234,11 @@ function SetNvimcomInfo(nvimcomversion, nvimcomhome, bindportn, rpid, wid, r_inf
     endif
 
     if g:rplugin.nvimcom_info['version'] != a:nvimcomversion
-        call RWarningMsg('Mismatch in nvimcom versions: "' . s:nvimcom_version . '" and "' . a:nvimcomversion . '"')
+        call RWarningMsg('Mismatch in nvimcom versions: "' . g:rplugin.nvimcom_info['version'] . '" and "' . a:nvimcomversion . '"')
         sleep 1
     endif
+
+    let $R_DEFAULT_PACKAGES = s:r_default_pkgs
 
     let g:rplugin.nvimcom_port = a:bindportn
     let s:R_pid = a:rpid
@@ -229,10 +249,14 @@ function SetNvimcomInfo(nvimcomversion, nvimcomhome, bindportn, rpid, wid, r_inf
     if !exists("g:R_OutDec")
         let g:R_OutDec = Rinfo[1]
     endif
-    let g:Rout_prompt_str = substitute(Rinfo[2], ' $', '', '')
-    let g:Rout_continue_str = substitute(Rinfo[3], ' $', '', '')
-    let g:Rout_prompt_str = substitute(g:Rout_prompt_str, '.*#N#', '', '')
-    let g:Rout_continue_str = substitute(g:Rout_continue_str, '.*#N#', '', '')
+    if !exists('g:Rout_prompt_str')
+        let g:Rout_prompt_str = substitute(Rinfo[2], ' $', '', '')
+        let g:Rout_prompt_str = substitute(g:Rout_prompt_str, '.*#N#', '', '')
+    endif
+    if !exists('g:Rout_continue_str')
+        let g:Rout_continue_str = substitute(Rinfo[3], ' $', '', '')
+        let g:Rout_continue_str = substitute(g:Rout_continue_str, '.*#N#', '', '')
+    endif
 
     if has('nvim') && has_key(g:rplugin, "R_bufname")
         " Put the cursor and the end of the buffer to ensure automatic scrolling
@@ -307,6 +331,10 @@ function SetNvimcomInfo(nvimcomversion, nvimcomhome, bindportn, rpid, wid, r_inf
         endfor
     endif
     call timer_start(1000, "SetSendCmdToR")
+    if g:R_objbr_auto_start
+        let s:autosttobjbr = 1
+        call timer_start(1010, "RObjBrowser")
+    endif
 endfunction
 
 function SetSendCmdToR(...)
@@ -337,8 +365,8 @@ function RQuit(how)
         call JobStdin(g:rplugin.jobs["ClientServer"], "74" . $NVIMR_COMPLDIR . "\n")
     endif
 
-    if bufloaded(b:objbrtitle)
-        exe "bunload! " . b:objbrtitle
+    if bufloaded('Object_Browser')
+        exe 'bunload! Object_Browser'
         sleep 30m
     endif
 
@@ -492,6 +520,9 @@ function UpdateLocalFunctions(funnames)
     syntax clear rGlobEnvFun
     let flist = split(a:funnames, " ")
     for fnm in flist
+        if fnm =~ '[\\\[\$@-]'
+            continue
+        endif
         if !exists('g:R_hi_fun_paren') || g:R_hi_fun_paren == 0
             exe 'syntax keyword rGlobEnvFun ' . fnm
         else
@@ -535,35 +566,41 @@ function StartObjBrowser()
     " Either open or close the Object Browser
     let savesb = &switchbuf
     set switchbuf=useopen,usetab
-    if bufloaded(b:objbrtitle)
+    if bufloaded('Object_Browser')
         let curwin = win_getid()
-        exe "sb " . b:objbrtitle
+        let curtab = tabpagenr()
+        exe 'sb Object_Browser'
+        let objbrtab = tabpagenr()
         quit
         call win_gotoid(curwin)
+        if curtab != objbrtab
+            call StartObjBrowser()
+        endif
     else
-        " Copy the values of some local variables that will be inherited
-        let g:tmp_objbrtitle = b:objbrtitle
+        let edbuf = bufnr()
 
         if g:R_objbr_place =~# 'RIGHT'
-            sil exe 'botright vsplit ' . b:objbrtitle
+            sil exe 'botright vsplit Object_Browser'
         elseif g:R_objbr_place =~# 'LEFT'
-            sil exe 'topleft vsplit ' . b:objbrtitle
+            sil exe 'topleft vsplit Object_Browser'
         elseif g:R_objbr_place =~# 'TOP'
-            sil exe 'topleft split ' . b:objbrtitle
+            sil exe 'topleft split Object_Browser'
         elseif g:R_objbr_place =~# 'BOTTOM'
-            sil exe 'botright split ' . b:objbrtitle
+            sil exe 'botright split Object_Browser'
         else
             if g:R_objbr_place =~? 'console'
                 sil exe 'sb ' . g:rplugin.R_bufname
+            else
+                sil exe 'sb ' . g:rplugin.rscript_name
             endif
             if g:R_objbr_place =~# 'right'
-                sil exe 'rightbelow vsplit ' . b:objbrtitle
+                sil exe 'rightbelow vsplit Object_Browser'
             elseif g:R_objbr_place =~# 'left'
-                sil exe 'leftabove vsplit ' . b:objbrtitle
+                sil exe 'leftabove vsplit Object_Browser'
             elseif g:R_objbr_place =~# 'above'
-                sil exe 'aboveleft split ' . b:objbrtitle
+                sil exe 'aboveleft split Object_Browser'
             elseif g:R_objbr_place =~# 'below'
-                sil exe 'belowright split ' . b:objbrtitle
+                sil exe 'belowright split Object_Browser'
             else
                 call RWarningMsg('Invalid value for R_objbr_place: "' . R_objbr_place . '"')
                 exe "set switchbuf=" . savesb
@@ -582,15 +619,16 @@ function StartObjBrowser()
             let g:rplugin.ob_buf = nvim_win_get_buf(g:rplugin.ob_winnr)
         endif
 
-        " Inheritance of some local variables
-        let b:objbrtitle = g:tmp_objbrtitle
-        unlet g:tmp_objbrtitle
+        if exists('s:autosttobjbr') && s:autosttobjbr == 1
+            let s:autosttobjbr = 0
+            exe edbuf . 'sb'
+        endif
     endif
     exe "set switchbuf=" . savesb
 endfunction
 
 " Open an Object Browser window
-function RObjBrowser()
+function RObjBrowser(...)
     " Only opens the Object Browser if R is running
     if string(g:SendCmdToR) == "function('SendCmdToR_fake')"
         call RWarningMsg("The Object Browser can be opened only if R is running.")
@@ -650,9 +688,6 @@ endif
 let s:func_offset = -2
 let s:rdebugging = 0
 function StopRDebugging()
-    if !g:R_debug
-        return
-    endif
     "call sign_unplace('rdebugcurline')
     "sign unplace rdebugcurline
     sign unplace 1
@@ -687,11 +722,17 @@ function FindDebugFunc(srcref)
         if rlines[idx] =~# '^debugging in: '
             let funcnm = substitute(rlines[idx], '^debugging in: \(.\{-}\)(.*', '\1', '')
             let s:func_offset = search('.*\<' . funcnm . '\s*<-\s*function\s*(', 'b')
+            if s:func_offset < 1
+                let s:func_offset = search('.*\<' . funcnm . '\s*=\s*function\s*(', 'b')
+            endif
+            if s:func_offset < 1
+                let s:func_offset = search('.*\<' . funcnm . '\s*<<-\s*function\s*(', 'b')
+            endif
             if s:func_offset > 0
                 let s:func_offset -= 1
             endif
             if a:srcref == '<text>'
-                if &filetype == 'rmd'
+                if &filetype == 'rmd' || &filetype == 'quarto'
                     let s:func_offset = search('^\s*```\s*{\s*r', 'nb')
                 elseif &filetype == 'rnoweb'
                     let s:func_offset = search('^<<', 'nb')
@@ -715,8 +756,9 @@ function FindDebugFunc(srcref)
 endfunction
 
 function RDebugJump(fnm, lnum)
-    if !g:R_debug
-        return
+    let saved_so = &scrolloff
+    if g:R_debug_center == 1
+        set so=999
     endif
     if a:fnm == '' || a:fnm == '<text>'
         " Functions sent directly to R Console have no associated source file
@@ -724,12 +766,12 @@ function RDebugJump(fnm, lnum)
         if s:func_offset == -2
             call FindDebugFunc(a:fnm)
         endif
-        if s:func_offset <= 0
+        if s:func_offset < 0
             return
         endif
     endif
 
-    if s:func_offset > 0
+    if s:func_offset >= 0
         let flnum = a:lnum + s:func_offset
         let fname = g:rplugin.rscript_name
     else
@@ -776,6 +818,7 @@ function RDebugJump(fnm, lnum)
         exe 'sb ' . bname
     endif
     let s:rdebugging = 1
+    exe 'set so=' . saved_so
 endfunction
 
 
@@ -1067,9 +1110,6 @@ function ShowRDoc(rkeyword)
     endif
     call SetRTextWidth(rkeyw)
 
-    " Local variables that must be inherited by the rdoc buffer
-    let g:tmp_objbrtitle = b:objbrtitle
-
     let rdoccaption = substitute(s:rdoctitle, '\', '', "g")
     if a:rkeyword =~ "R History"
         let rdoccaption = "R_History"
@@ -1118,10 +1158,6 @@ function ShowRDoc(rkeyword)
 
     setlocal modifiable
     let g:rplugin.curbuf = bufname("%")
-
-    " Inheritance of local variables from the script buffer
-    let b:objbrtitle = g:tmp_objbrtitle
-    unlet g:tmp_objbrtitle
 
     let save_unnamed_reg = @@
     set modifiable
@@ -1185,7 +1221,7 @@ function RSourceLines(...)
     if &filetype == "rrst"
         let lines = map(copy(lines), 'substitute(v:val, "^\\.\\. \\?", "", "")')
     endif
-    if &filetype == "rmd"
+    if &filetype == "rmd" || &filetype == "quarto"
         let lines = map(copy(lines), 'substitute(v:val, "^(\\`\\`)\\?", "", "")')
     endif
     if !g:R_commented_lines
@@ -1235,7 +1271,7 @@ function GoDown()
             call RnwNextChunk()
             return
         endif
-    elseif &filetype == "rmd"
+    elseif &filetype == "rmd" || &filetype == "quarto"
         let curline = getline(".")
         if curline =~ '^```$'
             call RmdNextChunk()
@@ -1416,10 +1452,10 @@ endfunction
 function SendSelectionToR(...)
     let ispy = 0
     if &filetype != "r"
-        if &filetype == 'rmd' && RmdIsInPythonCode(0)
+        if (&filetype == 'rmd' || &filetype == 'quarto') && RmdIsInPythonCode(0)
             let ispy = 1
         elseif b:IsInRCode(0) != 1
-            if (&filetype == "rnoweb" && getline(".") !~ "\\Sexpr{") || (&filetype == "rmd" && getline(".") !~ "`r ") || (&filetype == "rrst" && getline(".") !~ ":r:`")
+            if (&filetype == "rnoweb" && getline(".") !~ "\\Sexpr{") || ((&filetype == "rmd" || &filetype == "quarto") && getline(".") !~ "`r ") || (&filetype == "rrst" && getline(".") !~ ":r:`")
                 call RWarningMsg("Not inside an R code chunk.")
                 return
             endif
@@ -1517,7 +1553,7 @@ function SendParagraphToR(e, m)
         let line = getline(i-1)
         while i > 1 && !(line =~ '^\s*$' ||
                     \ (&filetype == "rnoweb" && line =~ "^<<") ||
-                    \ (&filetype == "rmd" && line =~ "^[ \t]*```{\\(r\\|python\\)"))
+                    \ ((&filetype == "rmd" || &filetype == "quarto") && line =~ "^[ \t]*```{\\(r\\|python\\)"))
             let i -= 1
             let line = getline(i-1)
         endwhile
@@ -1529,7 +1565,7 @@ function SendParagraphToR(e, m)
         let line = getline(j+1)
         if line =~ '^\s*$' ||
                     \ (&filetype == "rnoweb" && line =~ "^@$") ||
-                    \ (&filetype == "rmd" && line =~ "^[ \t]*```$")
+                    \ ((&filetype == "rmd" || &filetype == "quarto") && line =~ "^[ \t]*```$")
             break
         endif
         let j += 1
@@ -1557,7 +1593,7 @@ function SendFHChunkToR()
         let begchk = "^<<.*>>=\$"
         let endchk = "^@"
         let chdchk = "^<<.*child *= *"
-    elseif &filetype == "rmd"
+    elseif &filetype == "rmd" || &filetype == "quarto"
         let begchk = "^[ \t]*```[ ]*{r"
         let endchk = "^[ \t]*```$"
         let chdchk = "^```.*child *= *"
@@ -1653,7 +1689,7 @@ function SendLineToR(godown, ...)
         endif
     endif
 
-    if &filetype == "rmd"
+    if &filetype == "rmd" || &filetype == "quarto"
         if line == "```"
             if a:godown =~ "down"
                 call GoDown()
@@ -1715,7 +1751,7 @@ function SendLineToR(godown, ...)
     let block = 0
     if g:R_parenblock
         let chunkend = ""
-        if &filetype == "rmd"
+        if &filetype == "rmd" || &filetype == "quarto"
             let chunkend = "```"
         elseif &filetype == "rnoweb"
             let chunkend = "@"
@@ -1915,7 +1951,7 @@ endfunction
 " Call R functions for the word under cursor
 function RAction(rcmd, ...)
     if &filetype == "rbrowser"
-        let rkeyword = RBrowserGetName(1, 0)
+        let rkeyword = RBrowserGetName()
     elseif a:0 == 1 && a:1 == "v" && line("'<") == line("'>")
         let rkeyword = strpart(getline("'>"), col("'<") - 1, col("'>") - col("'<") + 1)
     elseif a:0 == 1 && a:1 != "v" && a:1 !~ '^,'
@@ -2073,14 +2109,16 @@ let g:R_editor_w          = get(g:, "R_editor_w",          66)
 let g:R_help_w            = get(g:, "R_help_w",            46)
 let g:R_esc_term          = get(g:, "R_esc_term",           1)
 let g:R_close_term        = get(g:, "R_close_term",         1)
-let g:R_buffer_opts       = get(g:, "R_buffer_opts", "winfixwidth nobuflisted")
+let g:R_buffer_opts       = get(g:, "R_buffer_opts", "winfixwidth winfixheight nobuflisted")
 let g:R_debug             = get(g:, "R_debug",              1)
+let g:R_debug_center      = get(g:, "R_debug_center",       0)
 let g:R_dbg_jump          = get(g:, "R_dbg_jump",           1)
 let g:R_wait              = get(g:, "R_wait",              60)
 let g:R_wait_reply        = get(g:, "R_wait_reply",         2)
 let g:R_open_example      = get(g:, "R_open_example",       1)
 let g:R_bracketed_paste   = get(g:, "R_bracketed_paste",    0)
 let g:R_clear_console     = get(g:, "R_clear_console",      1)
+let g:R_objbr_auto_start  = get(g:, "R_objbr_auto_start",   0)
 
 " ^K (\013) cleans from cursor to the right and ^U (\025) cleans from cursor
 " to the left. However, ^U causes a beep if there is nothing to clean. The
@@ -2115,4 +2153,3 @@ elseif has("win32") && filewritable('NUL')
 else
     let s:null = 'tempfile()'
 endif
-
