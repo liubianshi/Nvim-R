@@ -124,7 +124,7 @@ nvim.args <- function(funcname, txt = "", pkg = NULL, objclass, extrainfo = FALS
         res <- paste0(res, collapse='')
 
 
-    if(length(res) == 0 || res == ""){
+    if(length(res) == 0 || all(res == "")){
         res <- "[]"
     } else {
         if(is.null(pkg)){
