@@ -39,6 +39,9 @@ function RSetPDFViewer()
         endif
     endif
 
+    " FIXME: The ActivateWindowByTitle extension is no longer working
+    return
+
     if $WAYLAND_DISPLAY != "" && $GNOME_SHELL_SESSION_MODE != ""
         if executable('busctl')
             let sout = system('busctl --user call org.gnome.Shell.Extensions ' .
@@ -53,14 +56,25 @@ endfunction
 
 let g:rplugin.has_wmctrl = 0
 let g:rplugin.has_awbt = 0
-function RaiseWindow(wttl)
+function RRaiseWindow(wttl)
     if g:rplugin.has_wmctrl
         call system("wmctrl -a '" . a:wttl . "'")
+        return 1
     elseif $WAYLAND_DISPLAY != "" && $GNOME_SHELL_SESSION_MODE != "" && g:rplugin.has_awbt
-        call system("busctl --user call org.gnome.Shell " .
+        let sout = system("busctl --user call org.gnome.Shell " .
                     \ "/de/lucaswerkmeister/ActivateWindowByTitle " .
                     \ "de.lucaswerkmeister.ActivateWindowByTitle " .
                     \ "activateBySubstring s '" . a:wttl . "'")
+        if v:shell_error
+            call RWarningMsg('Error running Gnome Shell Extension "Activate Window By Title": '
+                        \ . substitute(sout, "\n", " ", "g"))
+            return 0
+        endif
+        if sout =~ 'false'
+            return 0
+        else
+            return 1
+        endif
     endif
 endfunction
 

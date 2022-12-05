@@ -1,5 +1,5 @@
 
-if exists("g:disable_r_ftplugin")
+if exists("g:R_filetypes") && type(g:R_filetypes) == v:t_list && index(g:R_filetypes, 'rmd') == -1
     finish
 endif
 
@@ -7,7 +7,9 @@ endif
 exe "source " . substitute(expand("<sfile>:h:h"), ' ', '\ ', 'g') . "/R/common_buffer.vim"
 
 " Bibliographic completion
-exe "source " . substitute(expand("<sfile>:h:h"), ' ', '\ ', 'g') . "/R/bibcompl.vim"
+if index(g:R_bib_compl, &filetype) > -1
+    exe "source " . substitute(expand("<sfile>:h:h"), ' ', '\ ', 'g') . "/R/bibcompl.vim"
+endif
 
 let g:R_rmdchunk = get(g:, "R_rmdchunk", 1)
 
@@ -22,8 +24,13 @@ function! RWriteRmdChunk()
     if getline(".") =~ "^\\s*$" && RmdIsInRCode(0) == 0
         let curline = line(".")
         call setline(curline, "```{r}")
-        call append(curline, ["```", ""])
-        call cursor(curline, 5)
+        if &filetype == 'quarto'
+            call append(curline, ["", "```", ""])
+            call cursor(curline + 1, 1)
+        else
+            call append(curline, ["```", ""])
+            call cursor(curline, 5)
+        endif
     else
         exe "normal! a`"
     endif
@@ -219,7 +226,7 @@ if !exists('b:rplugin_bibf')
     let b:rplugin_bibf = ''
 endif
 
-if g:R_non_r_compl
+if g:R_non_r_compl && index(g:R_bib_compl, &filetype) > -1
     call timer_start(1, "CheckPyBTeX")
 endif
 

@@ -17,6 +17,7 @@ unlet g:SendLineToRAndInsertOutput
 unlet g:SendMBlockToR
 unlet g:SendParagraphToR
 unlet g:SendSelectionToR
+unlet g:SendFileToR
 
 "==============================================================================
 " Functions to start and close R
@@ -882,6 +883,9 @@ function FinishRInsert(type)
     silent exe "read " . substitute(g:rplugin.tmpdir, ' ', '\\ ', 'g') . "/Rinsert"
 
     if a:type == "comment"
+        if !exists('*RSimpleCommentLine')
+            exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/comment.vim"
+        endif
         let curpos = getpos(".")
         " comment the output
         let ilines = readfile(g:rplugin.tmpdir . "/Rinsert")
@@ -1051,7 +1055,7 @@ function AskRDoc(rkeyword, package, getclass)
         exe "set switchbuf=" . savesb
     else
         if a:getclass
-            let firstobj = RGetFirstObj(a:rkeyword)
+            let firstobj = RGetFirstObj(a:rkeyword)[0]
         endif
     endif
 
@@ -1263,6 +1267,25 @@ function RSourceLines(...)
     return ok
 endfunction
 
+function CleanOxygenLine(line)
+    let cline = a:line
+    if cline =~ "^\s*#\\{1,2}'"
+        let synName = synIDattr(synID(line("."), col("."), 1), "name")
+        if synName == "rOExamples"
+            let cline = substitute(cline, "^\s*#\\{1,2}'", "", "")
+        endif
+    endif
+    return cline
+endfunction
+
+function CleanCurrentLine()
+    let curline = substitute(getline("."), '^\s*', "", "")
+    if &filetype == "r"
+        let curline = CleanOxygenLine(curline)
+    endif
+    return curline
+endfunction
+
 " Skip empty lines and lines whose first non blank char is '#'
 function GoDown()
     if &filetype == "rnoweb"
@@ -1371,6 +1394,14 @@ function SendMBlockToR(e, m)
         call cursor(lineB, 1)
         call GoDown()
     endif
+endfunction
+
+" Count braces
+function CountBraces(line)
+    let line2 = substitute(a:line, "{", "", "g")
+    let line3 = substitute(a:line, "}", "", "g")
+    let result = strlen(line3) - strlen(line2)
+    return result
 endfunction
 
 " Send functions to R
@@ -1662,6 +1693,12 @@ function RParenDiff(str)
     return llen1 - llen2
 endfunction
 
+if exists('g:r_indent_op_pattern')
+    let g:rplugin.op_pattern = g:r_indent_op_pattern
+else
+    let g:rplugin.op_pattern = '\(&\||\|+\|-\|\*\|/\|=\|\~\|%\|->\||>\)\s*$'
+endif
+
 " Send current line to R.
 function SendLineToR(godown, ...)
     let lnum = get(a:, 1, ".")
@@ -1759,7 +1796,7 @@ function SendLineToR(godown, ...)
             let chunkend = ".. .."
         endif
         let rpd = RParenDiff(line)
-        let has_op = line =~ '%>%\s*$'
+        let has_op = substitute(line, '#.*', '', '') =~ g:rplugin.op_pattern
         if rpd < 0
             let line1 = line(".")
             let cline = line1 + 1
@@ -1770,7 +1807,7 @@ function SendLineToR(godown, ...)
                 endif
                 let rpd += RParenDiff(txt)
                 if rpd == 0
-                    let has_op = getline(cline) =~ '%>%\s*$'
+                    let has_op = substitute(getline(cline), '#.*', '', '') =~ g:rplugin.op_pattern
                     for lnum in range(line1, cline)
                         if g:R_bracketed_paste
                             if lnum == line1 && lnum == cline
@@ -1910,7 +1947,7 @@ function PrintRObject(rkeyword)
     if bufname("%") =~ "Object_Browser"
         let firstobj = ""
     else
-        let firstobj = RGetFirstObj(a:rkeyword)
+        let firstobj = RGetFirstObj(a:rkeyword)[0]
     endif
     if firstobj == ""
         call g:SendCmdToR("print(" . a:rkeyword . ")")
@@ -1950,7 +1987,9 @@ endfunction
 
 " Call R functions for the word under cursor
 function RAction(rcmd, ...)
-    if &filetype == "rbrowser"
+    if &filetype == "rdoc"
+        let rkeyword = expand('<cword>')
+    elseif &filetype == "rbrowser"
         let rkeyword = RBrowserGetName()
     elseif a:0 == 1 && a:1 == "v" && line("'<") == line("'>")
         let rkeyword = strpart(getline("'>"), col("'<") - 1, col("'>") - col("'<") + 1)
@@ -2053,6 +2092,47 @@ function RAction(rcmd, ...)
 
         let raction = rfun . '(' . rkeyword . argmnts . ')'
         call g:SendCmdToR(raction)
+    endif
+endfunction
+
+function RLoadHTML(fullpath, browser)
+    if g:R_openhtml == 0
+        return
+    endif
+
+    if a:browser == ''
+        if has('win32') || g:rplugin.is_darwin
+            let cmd = ['open', a:fullpath]
+        else
+            let cmd = ['xdg-open', a:fullpath]
+        endif
+    else
+        let cmd = split(a:browser) + [a:fullpath]
+    endif
+
+    if has('nvim')
+        call jobstart(cmd, {'detach': 1})
+    else
+        call job_start(cmd)
+    endif
+endfunction
+
+function ROpenDoc(fullpath, browser)
+    if a:fullpath == ""
+        return
+    endif
+    if !filereadable(a:fullpath)
+        call RWarningMsg('The file "' . a:fullpath . '" does not exist.')
+        return
+    endif
+    if a:fullpath =~ '.odt$' || a:fullpath =~ '.docx$'
+        call system('lowriter ' . a:fullpath . ' &')
+    elseif a:fullpath =~ '.pdf$'
+        call ROpenPDF(a:fullpath)
+    elseif a:fullpath =~ '.html$'
+        call RLoadHTML(a:fullpath, a:browser)
+    else
+        call RWarningMsg("Unknown file type from nvim.interlace: " . a:fullpath)
     endif
 endfunction
 

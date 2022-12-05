@@ -244,199 +244,6 @@ function IsLineInRCode(vrb, line)
     return isR
 endfunction
 
-function RSimpleCommentLine(mode, what)
-    let [fline, lline] = RGetFL(a:mode)
-    let cstr = g:R_rcomment_string
-    if (&filetype == "rnoweb"|| &filetype == "rhelp") && IsLineInRCode(0, fline) == 0
-        let cstr = "%"
-    elseif (&filetype == "rmd" || &filetype == "quarto" || &filetype == "rrst") && IsLineInRCode(0, fline) == 0
-        return
-    endif
-
-    if a:what == "c"
-        for ii in range(fline, lline)
-            call setline(ii, cstr . getline(ii))
-        endfor
-    else
-        for ii in range(fline, lline)
-            call setline(ii, substitute(getline(ii), "^" . cstr, "", ""))
-        endfor
-    endif
-endfunction
-
-function RCommentLine(lnum, ind, cmt)
-    let line = getline(a:lnum)
-    call cursor(a:lnum, 0)
-
-    if line =~ '^\s*' . a:cmt || line =~ '^\s*#'
-        let line = substitute(line, '^\s*' . a:cmt, '', '')
-        let line = substitute(line, '^\s*#*', '', '')
-        call setline(a:lnum, line)
-        normal! ==
-    else
-        if g:R_indent_commented
-            while line =~ '^\s*\t'
-                let line = substitute(line, '^\(\s*\)\t', '\1' . s:curtabstop, "")
-            endwhile
-            let line = strpart(line, a:ind)
-        endif
-        let line = a:cmt . line
-        call setline(a:lnum, line)
-        if g:R_indent_commented
-            normal! ==
-        endif
-    endif
-endfunction
-
-function RComment(mode)
-    let cpos = getpos(".")
-    let [fline, lline] = RGetFL(a:mode)
-
-    " What comment string to use?
-    if g:r_indent_ess_comments
-        if g:R_indent_commented
-            let cmt = '## '
-        else
-            let cmt = '### '
-        endif
-    else
-        let cmt = g:R_rcomment_string
-    endif
-    if (&filetype == "rnoweb" || &filetype == "rhelp") && IsLineInRCode(0, fline) == 0
-        let cmt = "%"
-    elseif (&filetype == "rmd" || &filetype == "quarto" || &filetype == "rrst") && IsLineInRCode(0, fline) == 0
-        return
-    endif
-
-    let lnum = fline
-    let ind = &tw
-    while lnum <= lline
-        let idx = indent(lnum)
-        if idx < ind
-            let ind = idx
-        endif
-        let lnum += 1
-    endwhile
-
-    let lnum = fline
-    let s:curtabstop = repeat(' ', &tabstop)
-    while lnum <= lline
-        call RCommentLine(lnum, ind, cmt)
-        let lnum += 1
-    endwhile
-    call cursor(cpos[1], cpos[2])
-endfunction
-
-function MovePosRCodeComment(mode)
-    if a:mode == "selection"
-        let fline = line("'<")
-        let lline = line("'>")
-    else
-        let fline = line(".")
-        let lline = fline
-    endif
-
-    let cpos = g:r_indent_comment_column
-    let lnum = fline
-    while lnum <= lline
-        let line = getline(lnum)
-        let cleanl = substitute(line, '\s*#.*', "", "")
-        let llen = strlen(cleanl)
-        if llen > (cpos - 2)
-            let cpos = llen + 2
-        endif
-        let lnum += 1
-    endwhile
-
-    let lnum = fline
-    while lnum <= lline
-        call MovePosRLineComment(lnum, cpos)
-        let lnum += 1
-    endwhile
-    call cursor(fline, cpos + 1)
-    if a:mode == "insert"
-        startinsert!
-    endif
-endfunction
-
-function MovePosRLineComment(lnum, cpos)
-    let line = getline(a:lnum)
-
-    let ok = 1
-
-    if &filetype == "rnoweb"
-        if search("^<<", "bncW") > search("^@", "bncW")
-            let ok = 1
-        else
-            let ok = 0
-        endif
-        if line =~ "^<<.*>>=$"
-            let ok = 0
-        endif
-        if ok == 0
-            call RWarningMsg("Not inside an R code chunk.")
-            return
-        endif
-    endif
-
-    if &filetype == "rhelp"
-        let lastsection = search('^\\[a-z]*{', "bncW")
-        let secname = getline(lastsection)
-        if secname =~ '^\\usage{' || secname =~ '^\\examples{' || secname =~ '^\\dontshow{' || secname =~ '^\\dontrun{' || secname =~ '^\\donttest{' || secname =~ '^\\testonly{' || secname =~ '^\\method{.*}{.*}('
-            let ok = 1
-        else
-            let ok = 0
-        endif
-        if ok == 0
-            call RWarningMsg("Not inside an R code section.")
-            return
-        endif
-    endif
-
-    if line !~ '#'
-        " Write the comment character
-        let line = line . repeat(' ', a:cpos)
-        let cmd = "let line = substitute(line, '^\\(.\\{" . (a:cpos - 1) . "}\\).*', '\\1# ', '')"
-        exe cmd
-        call setline(a:lnum, line)
-    else
-        " Align the comment character(s)
-        let line = substitute(line, '\s*#', '#', "")
-        let idx = stridx(line, '#')
-        let str1 = strpart(line, 0, idx)
-        let str2 = strpart(line, idx)
-        let line = str1 . repeat(' ', a:cpos - idx - 1) . str2
-        call setline(a:lnum, line)
-    endif
-endfunction
-
-" Count braces
-function CountBraces(line)
-    let line2 = substitute(a:line, "{", "", "g")
-    let line3 = substitute(a:line, "}", "", "g")
-    let result = strlen(line3) - strlen(line2)
-    return result
-endfunction
-
-function CleanOxygenLine(line)
-    let cline = a:line
-    if cline =~ "^\s*#\\{1,2}'"
-        let synName = synIDattr(synID(line("."), col("."), 1), "name")
-        if synName == "rOExamples"
-            let cline = substitute(cline, "^\s*#\\{1,2}'", "", "")
-        endif
-    endif
-    return cline
-endfunction
-
-function CleanCurrentLine()
-    let curline = substitute(getline("."), '^\s*', "", "")
-    if &filetype == "r"
-        let curline = CleanOxygenLine(curline)
-    endif
-    return curline
-endfunction
-
 function IsSendCmdToRFake()
     if string(g:SendCmdToR) != "function('SendCmdToR_fake')"
         let qcmd = "\\rq"
@@ -497,12 +304,14 @@ endfunction
 " call a specific print, summary, ..., method instead of the generic one.
 function RGetFirstObj(rkeyword, ...)
     let firstobj = ""
-    if a:0 == 2
-        let line = substitute(getline(a:1), '#.*', '', "")
+    if a:0 == 3
+        let line = substitute(a:1, '#.*', '', "")
         let begin = a:2
+        let listdf = a:3
     else
         let line = substitute(getline("."), '#.*', '', "")
         let begin = col(".")
+        let listdf = v:false
     endif
     if strlen(line) > begin
         let piece = strpart(line, begin)
@@ -510,9 +319,24 @@ function RGetFirstObj(rkeyword, ...)
             let begin -= 1
             let piece = strpart(line, begin)
         endwhile
+
+        " check if the first argument is being passed through a pipe operator
+        if begin > 2
+            let part1 = strpart(line, 0, begin)
+            if part1 =~ '\k\+\s*\(|>\|%>%\)'
+                let pipeobj = substitute(part1, '.\{-}\(\k\+\)\s*\(|>\|%>%\)\s*', '\1', '')
+                return [pipeobj, v:true]
+            endif
+        endif
+        let pline = substitute(getline(line('.') - 1), '#.*$', '', '')
+        if pline =~ '\k\+\s*\(|>\|%>%\)\s*$'
+            let pipeobj = substitute(pline, '.\{-}\(\k\+\)\s*\(|>\|%>%\)\s*$', '\1', '')
+            return [pipeobj, v:true]
+        endif
+
         let line = piece
         if line !~ '^\k*\s*('
-            return firstobj
+            return [firstobj, v:false]
         endif
         let begin = 1
         let linelen = strlen(line)
@@ -538,7 +362,7 @@ function RGetFirstObj(rkeyword, ...)
                         let lnum += 1
                     endwhile
                     if lnum > line("$")
-                        return ""
+                        return ["", v:false]
                     endif
                     let line = line . substitute(getline(lnum), '#.*', '', "")
                     let len = strlen(line)
@@ -569,7 +393,7 @@ function RGetFirstObj(rkeyword, ...)
                         let lnum += 1
                     endwhile
                     if lnum > line("$")
-                        return ""
+                        return ["", v:false]
                     endif
                     let line = line . substitute(getline(lnum), '#.*', '', "")
                     let len = strlen(line)
@@ -606,7 +430,7 @@ function RGetFirstObj(rkeyword, ...)
         let firstobj = substitute(firstobj, '"', '\\"', "g")
     endif
 
-    return firstobj
+    return [firstobj, v:false]
 endfunction
 
 function ROpenPDF(fullpath)
@@ -626,47 +450,6 @@ function ROpenPDF(fullpath)
             let b:pdf_is_open = 1
         endif
         call ROpenPDF2(a:fullpath)
-    endif
-endfunction
-
-function RLoadHTML(fullpath, browser)
-    if g:R_openhtml == 0
-        return
-    endif
-
-    if a:browser == ''
-        if has('win32') || g:rplugin.is_darwin
-            let cmd = ['open', a:fullpath]
-        else
-            let cmd = ['xdg-open', a:fullpath]
-        endif
-    else
-        let cmd = split(a:browser) + [a:fullpath]
-    endif
-
-    if has('nvim')
-        call jobstart(cmd, {'detach': 1})
-    else
-        call job_start(cmd)
-    endif
-endfunction
-
-function ROpenDoc(fullpath, browser)
-    if a:fullpath == ""
-        return
-    endif
-    if !filereadable(a:fullpath)
-        call RWarningMsg('The file "' . a:fullpath . '" does not exist.')
-        return
-    endif
-    if a:fullpath =~ '.odt$' || a:fullpath =~ '.docx$'
-        call system('lowriter ' . a:fullpath . ' &')
-    elseif a:fullpath =~ '.pdf$'
-        call ROpenPDF(a:fullpath)
-    elseif a:fullpath =~ '.html$'
-        call RLoadHTML(a:fullpath, a:browser)
-    else
-        call RWarningMsg("Unknown file type from nvim.interlace: " . a:fullpath)
     endif
 endfunction
 
@@ -797,14 +580,9 @@ endfunction
 function RCreateEditMaps()
     " Edit
     "-------------------------------------
-    call RCreateMaps('ni', 'RToggleComment',   'xx', ':call RComment("normal")')
-    call RCreateMaps('v',  'RToggleComment',   'xx', ':call RComment("selection")')
-    call RCreateMaps('ni', 'RSimpleComment',   'xc', ':call RSimpleCommentLine("normal", "c")')
-    call RCreateMaps('v',  'RSimpleComment',   'xc', ':call RSimpleCommentLine("selection", "c")')
-    call RCreateMaps('ni', 'RSimpleUnComment', 'xu', ':call RSimpleCommentLine("normal", "u")')
-    call RCreateMaps('v',  'RSimpleUnComment', 'xu', ':call RSimpleCommentLine("selection", "u")')
-    call RCreateMaps('ni', 'RRightComment',     ';', ':call MovePosRCodeComment("normal")')
-    call RCreateMaps('v',  'RRightComment',     ';', ':call MovePosRCodeComment("selection")')
+    if g:R_enable_comment
+        call RCreateCommentMaps()
+    endif
     " Replace 'underline' with '<-'
     if g:R_assign == 1 || g:R_assign == 2
         silent exe 'inoremap <buffer><silent> ' . g:R_assign_map . ' <Esc>:call ReplaceUnderS()<CR>a'
@@ -1023,6 +801,7 @@ let g:SendMBlockToR = function('RNotRunning')
 let g:SendParagraphToR = function('RNotRunning')
 let g:SendSelectionToR = function('RNotRunning')
 let g:SendCmdToR = function('SendCmdToR_fake')
+let g:SendFileToR = function('SendCmdToR_fake')
 
 
 
@@ -1098,11 +877,18 @@ let g:R_applescript       = get(g:, "R_applescript",        0)
 let g:R_never_unmake_menu = get(g:, "R_never_unmake_menu",  0)
 let g:R_insert_mode_cmds  = get(g:, "R_insert_mode_cmds",   0)
 let g:R_disable_cmds      = get(g:, "R_disable_cmds",    [''])
+let g:R_enable_comment    = get(g:, "R_enable_comment",     0)
 let g:R_openhtml          = get(g:, "R_openhtml",           1)
 let g:R_hi_fun_paren      = get(g:, "R_hi_fun_paren",       0)
 let g:R_hi_fun_globenv    = get(g:, "R_hi_fun_globenv",     0)
-let g:R_set_omnifunc      = get(g:, "R_set_omnifunc", ["r",  "rmd", "quarto", "rnoweb", "rhelp", "rrst"])
-let g:R_auto_omni         = get(g:, "R_auto_omni",    [])
+let g:R_bib_compl         = get(g:, "R_bib_compl", ["rnoweb"])
+
+if type(g:R_bib_compl) == v:t_string
+    let g:R_bib_compl = [g:R_bib_compl]
+endif
+
+let g:R_fun_data_1 = get(g:, 'R_fun_data_1', ['select', 'rename', 'mutate', 'filter'])
+let g:R_fun_data_2 = get(g:, 'R_fun_data_2', {'ggplot': ['aes'], 'with': ['lm', 'glm', 'lmer']})
 
 if exists(":terminal") != 2
     let g:R_external_term = get(g:, "R_external_term", 1)
@@ -1172,6 +958,24 @@ else
     let g:R_save_win_pos    = get(g:, "R_save_win_pos",    0)
     let g:R_arrange_windows = get(g:, "R_arrange_windows", 0)
 endif
+
+" The environment variables NVIMR_COMPLCB and NVIMR_COMPLInfo must be defined
+" before starting the nclientserver because it needs them at startup.
+" The options R_auto_omni and R_set_omnifunc must be defined before
+" finalizing the source common_buffer.vim.
+if has('nvim') && type(luaeval("package.loaded['cmp_nvim_r']")) == v:t_dict
+    let $NVIMR_COMPLCB = "v:lua.require'cmp_nvim_r'.asynccb"
+    let $NVIMR_COMPLInfo = "v:lua.require'cmp_nvim_r'.complinfo"
+    let g:R_set_omnifunc = get(g:, "R_set_omnifunc", [])
+    let g:R_auto_omni = []
+    let g:R_hi_fun_globenv = 2
+else
+    let $NVIMR_COMPLCB = 'SetComplMenu'
+    let $NVIMR_COMPLInfo = "SetComplInfo"
+    let g:R_auto_omni = get(g:, "R_auto_omni", [])
+    let g:R_set_omnifunc = get(g:, "R_set_omnifunc", ["r",  "rmd", "quarto", "rnoweb", "rhelp", "rrst"])
+endif
+
 
 " Look for invalid options
 
@@ -1291,6 +1095,10 @@ if type(g:R_external_term) == v:t_number && g:R_external_term == 0
     endif
 endif
 
+if g:R_enable_comment
+    exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/comment.vim"
+endif
+
 if has("gui_running")
     exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/gui_running.vim"
 endif
@@ -1298,9 +1106,6 @@ endif
 autocmd FuncUndefined StartR exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/start_r.vim"
 
 function GlobalRInit(...)
-    if len(g:R_auto_omni) > 0 || len(g:R_set_omnifunc) > 0
-        exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/complete.vim"
-    endif
     exe 'source ' . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/start_ncs.vim"
     call CheckNvimcomVersion()
 endfunction

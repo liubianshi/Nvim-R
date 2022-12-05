@@ -8,7 +8,7 @@
 " That is, we can call a function in nvimcom to get the contents of the float
 " window.
 
-if exists("*FormatInfo")
+if exists("*CompleteR")
     finish
 endif
 
@@ -36,24 +36,23 @@ function FormatInfo(width, needblank)
         let info .= ' ' . FormatTxt(ud['descr'], ' ', " \n ", a:width - 1)
     else
         if ud['descr'] != ''
-            let info = ' ' . FormatTxt(ud['descr'], ' ', " \n ", a:width - 1) . ' '
+            let info = ' ' . FormatTxt(ud['descr'], ' ', " \n ", a:width - 1)
         endif
         if ud['cls'] == 'f'
-            if ud['descr'] != '' && s:usage != ''
-                let info .= "\n————\n"
-            endif
             if s:usage != ''
+                if ud['descr'] != ''
+                    let info .= "\n————\n"
+                endif
+                let usg = "```{R} \n "
                 " Avoid the prefix ', \n  ' if function name + first argment is longer than a:width
-                let usg = FormatTxt(s:usage, ', ', ",  \n   ", a:width)
+                let usg .= FormatTxt(s:usage, ', ', ",  \n   ", a:width)
                 let usg = substitute(usg, "^,  \n   ", "", "")
-                let info .= ' ' . usg . ' '
+                let usg .= "\n```\n"
+                let info .= usg
             endif
         endif
-        if a:width > 59 && has_key(ud, 'summary')
-            if ud['descr'] != ''
-                let info .= "\n————\n"
-            endif
-            let info .= " " . join(ud['summary'], "\n ") . " "
+        if a:width > 29 && has_key(ud, 'summary')
+            let info .= "\n```{Rout} \n" . join(ud['summary'], "\n ") . "\n```\n"
         endif
     endif
 
@@ -61,9 +60,9 @@ function FormatInfo(width, needblank)
         return []
     endif
     if a:needblank
-        let lines = [''] + split(info, "\n") + ['']
+        let lines = [''] + split(info, "\n")
     else
-        let lines = split(info, "\n") + ['']
+        let lines = split(info, "\n")
     endif
     return lines
 endfunction
@@ -224,6 +223,7 @@ function CreateNewFloat(...)
             call setwinvar(s:float_win, '&wrap', 1)
             call setwinvar(s:float_win, '&colorcolumn', 0)
             call setwinvar(s:float_win, '&signcolumn', 'no')
+            call setwinvar(s:float_win, '&conceallevel', 3)
         endif
     else
         if fanchor == 'NE'
@@ -275,6 +275,7 @@ function AskForComplInfo()
     if ! pumvisible()
         return
     endif
+
     " Other plugins fill the 'user_data' dictionary
     if has_key(v:event, 'completed_item') && has_key(v:event['completed_item'], 'word')
         let s:compl_event = deepcopy(v:event)
@@ -286,8 +287,14 @@ function AskForComplInfo()
                 " Request function description and usage
                 call JobStdin(g:rplugin.jobs["ClientServer"], "6" . wrd . "\002" . pkg . "\n")
             elseif has_key(s:compl_event['completed_item']['user_data'], 'cls')
-                " Neovim doesn't allow to open a float window from here:
-                call timer_start(1, 'CreateNewFloat', {})
+                if s:compl_event['completed_item']['user_data']['cls'] == 'v'
+                    let pkg = s:compl_event['completed_item']['user_data']['env']
+                    let wrd = s:compl_event['completed_item']['user_data']['word']
+                    call JobStdin(g:rplugin.jobs["ClientServer"], "6" . wrd . "\002" . pkg . "\n")
+                else
+                    " Neovim doesn't allow to open a float window from here:
+                    call timer_start(1, 'CreateNewFloat', {})
+                endif
             elseif s:float_win
                 call CloseFloatWin()
             endif
@@ -339,7 +346,10 @@ function SetComplInfo(dctnr)
     endif
 endfunction
 
-function GetRArgs(id, base, rkeyword0, firstobj, pkg)
+" We can't transfer this function to the nclientserver because
+" nvimcom:::nvim_complete_args runs the function methods(), and we couldn't do
+" something similar in the nclientserver.
+function GetRArgs(id, base, rkeyword0, listdf, firstobj, pkg, isfarg)
     if a:rkeyword0 == ""
         return
     endif
@@ -350,29 +360,15 @@ function GetRArgs(id, base, rkeyword0, firstobj, pkg)
     elseif a:pkg != ""
         let msg .= ', pkg = ' . a:pkg
     endif
+    if a:firstobj != '' && ((a:listdf == 1 && !a:isfarg) || a:listdf == 2)
+        let msg .= ', ldf = TRUE'
+    endif
     let msg .= ')'
 
     " Save documentation of arguments to be used by nclientserver
     call SendToNvimcom("E", msg)
 endfunction
 
-function GetListOfRLibs(base)
-    let argls = []
-    let lsd = glob(g:rplugin.compldir . '/descr_*', 0, 1)
-    for fl in lsd
-        if fl =~ 'descr_' . a:base
-            let pnm = substitute(fl, '.*/descr_\(.\{-}\)_.*', '\1', 'g')
-            let lin = readfile(fl)[0]
-            let dsc = substitute(lin, ".*\t", "", "")
-            let ttl = substitute(lin, "\t.*", "", "")
-            call add(argls, {'word': pnm, 'user_data': {'ttl': ttl, 'descr': dsc, 'cls': 'l'}})
-        endif
-    endfor
-    return argls
-endfunction
-
-" TODO: Create a copy of this function at nclientserver.c
-" We still need this here for omnifunc
 function FindStartRObj()
     let line = getline(".")
     let lnum = line(".")
@@ -397,17 +393,14 @@ function FindStartRObj()
     return idx2 - 1
 endfunction
 
-" TODO: Transfer this function to nclientserver.c
 function NeedRArguments(line, cpos)
     " Check if we need function arguments
     let line = a:line
     let lnum = line(".")
     let cpos = a:cpos
     let idx = cpos[2] - 2
-    let idx2 = cpos[2] - 2
     let np = 1
     let nl = 0
-    let argls = []
     " Look up to 10 lines above for an opening parenthesis
     while nl < 10
         if line[idx] == '('
@@ -419,16 +412,48 @@ function NeedRArguments(line, cpos)
             " The opening parenthesis was found
             let rkeyword0 = RGetKeyword(lnum, idx)
             let firstobj = ""
+            let ispiped = v:false
+            let listdf = 0
             if rkeyword0 =~ "::"
                 let pkg = '"' . substitute(rkeyword0, "::.*", "", "") . '"'
                 let rkeyword0 = substitute(rkeyword0, ".*::", "", "")
             else
+                let rkeyword1 = rkeyword0
                 if string(g:SendCmdToR) != "function('SendCmdToR_fake')"
-                    let firstobj = RGetFirstObj(rkeyword0, lnum, idx)
+                    for fnm in g:R_fun_data_1
+                        if fnm == rkeyword0
+                            let listdf = 1
+                            break
+                        endif
+                    endfor
+                    for key in keys(g:R_fun_data_2)
+                        if index(g:R_fun_data_2[key], rkeyword0) > -1
+                            let listdf = 2
+                            let rkeyword1 = key
+                            break
+                        endif
+                    endfor
+                    if listdf == 2
+                        " Get first object of nesting function, if any
+                        if line =~ rkeyword1 . '\s*('
+                            let idx = stridx(line, rkeyword1)
+                        else
+                            let line = getline(lnum - 1)
+                            if line =~ rkeyword1 . '\s*('
+                                let idx = stridx(line, rkeyword1)
+                            else
+                                let rkeyword1 = rkeyword0
+                                let listdf = v:false
+                            endif
+                        endif
+                    endif
+                    let ro = RGetFirstObj(rkeyword1, line, idx, listdf)
+                    let firstobj = ro[0]
+                    let ispiped = ro[1]
                 endif
                 let pkg = ""
             endif
-            return [rkeyword0, firstobj, pkg, lnum, cpos]
+            return [rkeyword0, listdf, firstobj, ispiped, pkg, lnum, cpos]
         endif
         let idx -= 1
         if idx <= 0
@@ -458,11 +483,6 @@ function SetComplMenu(id, cmn)
     endif
 endfunction
 
-function AutoComplLibname(...)
-    let s:is_completing = 1
-    call complete(s:auto_compl_col + 1, s:libnames_list)
-endfunction
-
 function AutoComplChunkOpts(...)
     let s:is_completing = 1
     call complete(s:auto_compl_col + 1, s:chunk_opt_list)
@@ -473,6 +493,12 @@ let s:is_auto_completing = 0
 function RTriggerCompletion()
     let s:completion_id += 1
 
+    let isInR = b:IsInRCode(0)
+
+    if isInR == 0
+        return
+    endif
+
     " We are within the InsertCharPre event
     if v:char =~ '\k\|@\|\$\|\:\|_\|\.'
         let s:auto_compl_col = FindStartRObj()
@@ -482,7 +508,7 @@ function RTriggerCompletion()
         let s:auto_compl_col = col(".")
     endif
 
-    if b:IsInRCode(0) == 2
+    if isInR == 2
         if wrd == ''
             return
         endif
@@ -493,24 +519,41 @@ function RTriggerCompletion()
         return
     endif
 
+    let lin = getline(".")
+    let lin = strpart(lin, 0, col(".")) . v:char
+
+    if (&filetype == 'quarto' || &filetype == 'rmd') && isInR == 1 && lin =~ '^#| '
+        if lin !~ '^#| \k.*:'
+            " Yaml might include '-' which isn't a keyword character in R
+            let ywrd = substitute(lin, '^#| *', '', '')
+            if ywrd == ''
+                let s:auto_compl_col = len(lin)
+            else
+                let s:auto_compl_col = stridx(lin, ywrd)
+            endif
+            call CompleteQuartoCellOptions(ywrd)
+            call timer_start(1, 'AutoComplQCellOpts', {})
+        endif
+        if lin !~ '^#| \k.*: !expr '
+            return
+        endif
+    endif
+
     let snm = synIDattr(synID(line("."), col(".") - 1, 1), "name")
     if snm == "rComment"
         return
     endif
 
-    let lin = getline(".")
-    let lin = strpart(lin, 0, col(".")) . v:char
     let cpos = getpos(".")
     let cpos[2] = cpos[2] + 1
     let nra = NeedRArguments(lin, cpos)
     if len(nra) > 0
-        if (nra[0] == "library" || nra[0] == "require") && IsFirstRArg(lin, nra[3], nra[4])
-            let s:libnames_list = GetListOfRLibs(wrd)
-            if len(s:libnames_list)
-                " Can't call complete() here [E523]
-                call timer_start(1, 'AutoComplLibname', {})
-                return
-            endif
+        " Is the first object the first argument or was it piped?
+        let isfa = nra[3] ? v:false : IsFirstRArg(lin, nra[6])
+        if (nra[0] == "library" || nra[0] == "require") && isfa
+            let s:is_auto_completing = 1
+            call JobStdin(g:rplugin.jobs["ClientServer"], "5" . s:completion_id . "\003\004" . wrd . "\n")
+            return
         endif
 
         if snm == "rString"
@@ -519,7 +562,7 @@ function RTriggerCompletion()
 
         let s:is_auto_completing = 1
         if string(g:SendCmdToR) != "function('SendCmdToR_fake')"
-            call GetRArgs(s:completion_id, wrd, nra[0], nra[1], nra[2])
+            call GetRArgs(s:completion_id, wrd, nra[0], nra[1], nra[2], nra[4], isfa)
         endif
         return
     endif
@@ -535,11 +578,16 @@ endfunction
 
 function CompleteR(findstart, base)
     if a:findstart
-        let line = getline(".")
-        if b:rplugin_knitr_pattern != '' && line =~ b:rplugin_knitr_pattern
+        let lin = getline(".")
+        let isInR = b:IsInRCode(0)
+        if (&filetype == 'quarto' || &filetype == 'rmd') && isInR == 1 && lin =~ '^#| ' && lin !~ '^#| \k.*:'
+            let s:compl_type = 4
+            let ywrd = substitute(lin, '^#| *', '', '')
+            return stridx(lin, ywrd)
+        elseif b:rplugin_knitr_pattern != '' && lin =~ b:rplugin_knitr_pattern
             let s:compl_type = 3
             return FindStartRObj()
-        elseif b:IsInRCode(0) == 0 && b:rplugin_non_r_omnifunc != ''
+        elseif isInR == 0 && b:rplugin_non_r_omnifunc != ''
             let s:compl_type = 2
             let Ofun = function(b:rplugin_non_r_omnifunc)
             return Ofun(a:findstart, a:base)
@@ -548,7 +596,9 @@ function CompleteR(findstart, base)
             return FindStartRObj()
         endif
     else
-        if s:compl_type == 3
+        if s:compl_type == 4
+            return CompleteQuartoCellOptions(a:base)
+        elseif s:compl_type == 3
             return CompleteChunkOptions(a:base)
         elseif s:compl_type == 2
             let Ofun = function(b:rplugin_non_r_omnifunc)
@@ -560,18 +610,17 @@ function CompleteR(findstart, base)
 
         let nra = NeedRArguments(getline("."), getpos("."))
         if len(nra) > 0
-            if (nra[0] == "library" || nra[0] == "require") && IsFirstRArg(getline("."), nra[3], nra[4])
-                let argls = GetListOfRLibs(a:base)
-                if len(argls)
-                    let s:is_completing = 1
-                    return argls
-                endif
+            let isfa = nra[3] ? v:false : IsFirstRArg(getline("."), nra[6])
+            if (nra[0] == "library" || nra[0] == "require") && isfa
+                let s:waiting_compl_menu = 1
+                call JobStdin(g:rplugin.jobs["ClientServer"], "5" . s:completion_id . "\003" . "\004" . a:base . "\n")
+                return WaitRCompletion()
             endif
 
             call UpdateRGlobalEnv(1)
             let s:waiting_compl_menu = 1
             if string(g:SendCmdToR) != "function('SendCmdToR_fake')"
-                call GetRArgs(s:completion_id, a:base, nra[0], nra[1], nra[2])
+                call GetRArgs(s:completion_id, a:base, nra[0], nra[1], nra[2], nra[4], isfa)
                 return WaitRCompletion()
             endif
         endif
@@ -605,19 +654,17 @@ function WaitRCompletion()
     return []
 endfunction
 
-" TODO: Transfer this function to nclientserver.c
 function CompleteChunkOptions(base)
     " https://yihui.org/knitr/options/#chunk-options (2021-04-19)
-    let lines = readfile(g:rplugin.home . '/R/chunk_options')
+    let lines = json_decode(join(readfile(g:rplugin.home . '/R/chunk_options.json')))
 
     let ktopt = []
     for lin in lines
-        let dict = eval(lin)
-        let dict['abbr'] = dict['word']
-        let dict['word'] = dict['word'] . '='
-        let dict['menu'] = '= ' . dict['menu']
-        let dict['user_data']['cls'] = 'k'
-        let ktopt += [deepcopy(dict)]
+        let lin['abbr'] = lin['word']
+        let lin['word'] = lin['word'] . '='
+        let lin['menu'] = '= ' . lin['menu']
+        let lin['user_data']['cls'] = 'k'
+        let ktopt += [deepcopy(lin)]
     endfor
 
     let rr = []
@@ -634,16 +681,133 @@ function CompleteChunkOptions(base)
     return rr
 endfunction
 
-function IsFirstRArg(line, lnum, cpos)
-    let line = a:line
+function AutoComplQCellOpts(...)
+    let s:is_completing = 1
+    call complete(s:auto_compl_col + 1, s:cell_opt_list)
+endfunction
+
+function CompleteQuartoCellOptions(base)
+    if !exists('s:qchunk_opt_list')
+        call FillQuartoComplMenu()
+    endif
+    let s:cell_opt_list = deepcopy(s:qchunk_opt_list)
+    if strlen(a:base) > 0
+        let newbase = '^' . substitute(a:base, "\\$$", "", "")
+        call filter(s:cell_opt_list, 'v:val["abbr"] =~ newbase')
+    endif
+    return s:cell_opt_list
+endfunction
+
+function IsFirstRArg(line, cpos)
     let ii = a:cpos[2] - 2
-    let cchar = line[ii]
-    while ii > 0 && cchar != '('
-        let cchar = line[ii]
-        if cchar == ','
+    while ii > 0
+        if a:line[ii] == '('
+            return 1
+        endif
+        if a:line[ii] == ','
             return 0
         endif
         let ii -= 1
     endwhile
-    return 1
+    return 0
+endfunction
+
+function FillQuartoComplMenu()
+    let s:qchunk_opt_list = []
+
+    if exists('g:R_quarto_intel')
+        let quarto_yaml_intel = g:R_quarto_intel
+    else
+        let quarto_yaml_intel = ''
+        if has('win32')
+            let paths = split($PATH, ';')
+            call filter(paths, 'v:val =~? "quarto"')
+            if len(paths) > 0
+                let qjson = substitute(paths[0], 'bin$', 'share/editor/tools/yaml/yaml-intelligence-resources.json', '')
+                let qjson = substitute(qjson, '\\', '/', 'g')
+                if filereadable(qjson)
+                    let quarto_yaml_intel = qjson
+                endif
+            endif
+        elseif executable('quarto')
+            let quarto_bin = system('which quarto')
+            let quarto_dir1 = substitute(quarto_bin, '\(.*\)/.\{-}/.*', '\1', 'g')
+            let quarto_yaml_intel = ''
+            if filereadable(quarto_dir1 . '/share/editor/tools/yaml/yaml-intelligence-resources.json')
+                let quarto_yaml_intel = quarto_dir1 . '/share/editor/tools/yaml/yaml-intelligence-resources.json'
+            else
+                let quarto_bin = system('readlink ' . quarto_bin)
+                let quarto_dir2 = substitute(quarto_bin, '\(.*\)/.\{-}/.*', '\1', 'g')
+                if quarto_dir2 =~ '^\.\./'
+                    while quarto_dir2 =~ '^\.\./'
+                        let quarto_dir2 = substitute(quarto_dir2, '^\.\./*', '', '')
+                    endwhile
+                    let quarto_dir2 = quarto_dir1 . '/' . quarto_dir2
+                endif
+                if filereadable(quarto_dir2 . '/share/editor/tools/yaml/yaml-intelligence-resources.json')
+                    let quarto_yaml_intel = quarto_dir2 . '/share/editor/tools/yaml/yaml-intelligence-resources.json'
+                endif
+            endif
+        endif
+    endif
+
+    if quarto_yaml_intel != ''
+        let intel = json_decode(join(readfile(quarto_yaml_intel), "\n"))
+        for key in ['schema/cell-attributes.yml',
+                    \ 'schema/cell-cache.yml',
+                    \ 'schema/cell-codeoutput.yml',
+                    \ 'schema/cell-figure.yml',
+                    \ 'schema/cell-include.yml',
+                    \ 'schema/cell-layout.yml',
+                    \ 'schema/cell-pagelayout.yml',
+                    \ 'schema/cell-table.yml',
+                    \ 'schema/cell-textoutput.yml']
+            let tmp = intel[key]
+            for item in tmp
+                let abr = item['name']
+                let wrd = abr . ': '
+                let descr = type(item['description']) == v:t_string ? item['description'] : item['description']['long']
+                let descr = substitute(descr, '\n', ' ', 'g')
+                let dict = {'word': wrd, 'abbr': abr, 'menu': '[opt]', 'user_data': {'cls': 'k', 'descr': descr}}
+                call add(s:qchunk_opt_list, dict)
+            endfor
+        endfor
+    endif
+endfunction
+
+function RComplAutCmds()
+    if &filetype == "rnoweb" || &filetype == "rrst" || &filetype == "rmd" || &filetype == "quarto"
+        if &omnifunc == "CompleteR"
+            let b:rplugin_non_r_omnifunc = ""
+        else
+            let b:rplugin_non_r_omnifunc = &omnifunc
+        endif
+    endif
+    if index(g:R_set_omnifunc, &filetype) > -1
+        setlocal omnifunc=CompleteR
+    endif
+    if index(g:R_auto_omni, &filetype) > -1
+        " Plugins that automatically run omni completion will work better if they
+        " don't have to wait for the omni list to be built.
+        let g:R_hi_fun_globenv = 2
+    endif
+
+    " Test whether the autocommands were already defined to avoid getting them
+    " registered three times
+    if !exists('b:did_RBuffer_au')
+        augroup RBuffer
+            autocmd InsertEnter <buffer> call ROnInsertEnter()
+            if index(g:R_auto_omni, &filetype) > -1
+                let b:rplugin_saved_completeopt = &completeopt
+                autocmd InsertCharPre <buffer> call RTriggerCompletion()
+                autocmd BufLeave <buffer> exe 'set completeopt=' . b:rplugin_saved_completeopt
+                autocmd BufEnter <buffer> set completeopt=menuone,noselect
+            endif
+            if index(g:R_auto_omni, &filetype) > -1 || index(g:R_set_omnifunc, &filetype) > -1
+                autocmd CompleteChanged <buffer> call AskForComplInfo()
+                autocmd CompleteDone <buffer> call OnCompleteDone()
+            endif
+        augroup END
+    endif
+    let b:did_RBuffer_au = 1
 endfunction
