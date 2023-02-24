@@ -45,10 +45,6 @@ function StartR(whatr)
         let g:R_objbr_place = substitute(g:R_objbr_place, 'console', 'script', '')
     endif
 
-    if !isdirectory(g:rplugin.tmpdir)
-        call mkdir(g:rplugin.tmpdir, "p", 0700)
-    endif
-
     " https://github.com/jalvesaq/Nvim-R/issues/157
     if !exists("*FunHiOtherBf")
         exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/functions.vim"
@@ -74,7 +70,6 @@ function StartR(whatr)
     call AddForDeletion(g:rplugin.tmpdir . "/GlobalEnvList_" . $NVIMR_ID)
     call AddForDeletion(g:rplugin.tmpdir . "/globenv_" . $NVIMR_ID)
     call AddForDeletion(g:rplugin.tmpdir . "/liblist_" . $NVIMR_ID)
-    call AddForDeletion(g:rplugin.tmpdir . "/nvimbol_finished")
 
     if &encoding == "utf-8"
         call AddForDeletion(g:rplugin.tmpdir . "/start_options_utf8.R")
@@ -259,12 +254,12 @@ function SetNvimcomInfo(nvimcomversion, nvimcomhome, bindportn, rpid, wid, r_inf
         let g:Rout_continue_str = substitute(g:Rout_continue_str, '.*#N#', '', '')
     endif
 
-    if has('nvim') && has_key(g:rplugin, "R_bufname")
+    if has('nvim') && has_key(g:rplugin, "R_bufnr")
         " Put the cursor and the end of the buffer to ensure automatic scrolling
         " See: https://github.com/neovim/neovim/issues/2636
         let isnormal = mode() ==# 'n'
         let curwin = winnr()
-        exe 'sb ' . g:rplugin.R_bufname
+        exe 'sb ' . g:rplugin.R_bufnr
         if !exists('g:R_hl_term')
             if Rinfo[4] =~# 'colorout'
                 let g:R_hl_term = 0
@@ -300,12 +295,12 @@ function SetNvimcomInfo(nvimcomversion, nvimcomhome, bindportn, rpid, wid, r_inf
     if exists("g:RStudio_cmd")
         if has("win32") && g:R_arrange_windows && filereadable(g:rplugin.compldir . "/win_pos")
             " ArrangeWindows
-            call JobStdin(g:rplugin.jobs["ClientServer"], "75" . g:rplugin.compldir . "\n")
+            call JobStdin(g:rplugin.jobs["ClientServer"], "85" . g:rplugin.compldir . "\n")
         endif
     elseif has("win32")
         if g:R_arrange_windows && filereadable(g:rplugin.compldir . "/win_pos")
             " ArrangeWindows
-            call JobStdin(g:rplugin.jobs["ClientServer"], "75" . g:rplugin.compldir . "\n")
+            call JobStdin(g:rplugin.jobs["ClientServer"], "85" . g:rplugin.compldir . "\n")
         endif
     elseif g:R_applescript
         call foreground()
@@ -363,7 +358,7 @@ function RQuit(how)
 
     if has("win32") && type(g:R_external_term) == v:t_number && g:R_external_term == 1
         " SaveWinPos
-        call JobStdin(g:rplugin.jobs["ClientServer"], "74" . $NVIMR_COMPLDIR . "\n")
+        call JobStdin(g:rplugin.jobs["ClientServer"], "84" . $NVIMR_COMPLDIR . "\n")
     endif
 
     if bufloaded('Object_Browser')
@@ -391,6 +386,7 @@ function ClearRInfo()
     let g:SendCmdToR = function('SendCmdToR_fake')
     let s:R_pid = 0
     let g:rplugin.nvimcom_port = 0
+    call JobStdin(g:rplugin.jobs["ClientServer"], "10\n")
 
     " Legacy support for running R in a Tmux split pane
     if has_key(g:rplugin, "tmux_split") && exists('g:R_tmux_title') && g:rplugin.tmux_split
@@ -401,7 +397,6 @@ function ClearRInfo()
     if type(g:R_external_term) == v:t_number && g:R_external_term == 0 && has("nvim")
         call CloseRTerm()
     endif
-
 endfunction
 
 let s:wait_nvimcom = 0
@@ -590,7 +585,7 @@ function StartObjBrowser()
             sil exe 'botright split Object_Browser'
         else
             if g:R_objbr_place =~? 'console'
-                sil exe 'sb ' . g:rplugin.R_bufname
+                sil exe 'sb ' . g:rplugin.R_bufnr
             else
                 sil exe 'sb ' . g:rplugin.rscript_name
             endif
@@ -704,7 +699,7 @@ function FindDebugFunc(srcref)
         let curtab = tabpagenr()
         let isnormal = mode() ==# 'n'
         let curwin = winnr()
-        exe 'sb ' . g:rplugin.R_bufname
+        exe 'sb ' . g:rplugin.R_bufnr
         sleep 30m " Time to fill the buffer lines
         let rlines = getline(1, "$")
         exe 'sb ' . g:rplugin.rscript_name
@@ -813,7 +808,7 @@ function RDebugJump(fnm, lnum)
     sign unplace 1
     exe 'sign place 1 line=' . flnum . ' name=dbgline file=' . fname
     if g:R_dbg_jump && !s:rdebugging && type(g:R_external_term) == v:t_number && g:R_external_term == 0
-        exe 'sb ' . g:rplugin.R_bufname
+        exe 'sb ' . g:rplugin.R_bufnr
         startinsert
     elseif bname != expand("%")
         exe 'sb ' . bname
@@ -922,35 +917,31 @@ function RViewDF(oname, ...)
         call system('cp "' . g:rplugin.tmpdir . '/Rinsert" "' . tsvnm . '"')
         call AddForDeletion(tsvnm)
 
-        if g:R_csv_app =~# '^terminal:'
-            let csv_app = split(g:R_csv_app, ':')[1]
-            if executable(csv_app)
-                tabnew
-                exe 'terminal ' . csv_app . ' ' . substitute(tsvnm, ' ', '\\ ', 'g')
-                startinsert
-            else
-                call RWarningMsg('R_csv_app ("' . csv_app . '") is not executable')
-            endif
+        if g:R_csv_app =~ '%s'
+            let cmd = printf(g:R_csv_app, tsvnm)
+        else
+            let cmd = g:R_csv_app . ' ' . tsvnm
+        endif
+
+        if g:R_csv_app =~# '^:'
+            exe cmd
             return
-        elseif g:R_csv_app =~# '^tmux new-window '
-            let csv_app = substitute(g:R_csv_app, '^tmux new-window *', '', '')
-            if !executable(csv_app)
-                call RWarningMsg('R_csv_app ("' . csv_app . '") is not executable')
-                return
-            endif
-        elseif !executable(g:R_csv_app) && !executable(split(g:R_csv_app)[0])
-            call RWarningMsg('R_csv_app ("' . g:R_csv_app . '") is not executable')
+        elseif g:R_csv_app =~# '^terminal:'
+            let cmd = substitute(cmd, '^terminal:', '', '')
+            tabnew
+            exe 'terminal ' . cmd
+            startinsert
             return
         endif
 
         normal! :<Esc>
         if has("nvim")
-            let appcmd = split(g:R_csv_app) + [tsvnm]
+            let appcmd = split(cmd)
             call jobstart(appcmd, {'detach': v:true})
         elseif has("win32")
             silent exe '!start "' . g:R_csv_app . '" "' . tsvnm . '"'
         else
-            call system(g:R_csv_app . ' "' . tsvnm . '" >' . s:null . ' 2>' . s:null . ' &')
+            call system(cmd . ' >' . s:null . ' 2>' . s:null . ' &')
         endif
         return
     endif
@@ -1048,7 +1039,7 @@ function AskRDoc(rkeyword, package, getclass)
     call AddForDeletion(s:docfile)
 
     let firstobj = ""
-    if bufname("%") =~ "Object_Browser" || (has_key(g:rplugin, "R_bufname") && bufname("%") == g:rplugin.R_bufname)
+    if bufname("%") =~ "Object_Browser" || (has_key(g:rplugin, "R_bufnr") && bufnr("%") == g:rplugin.R_bufnr)
         let savesb = &switchbuf
         set switchbuf=useopen,usetab
         exe "sb " . g:rplugin.rscript_name
@@ -1091,7 +1082,7 @@ function ShowRDoc(rkeyword)
         return
     endif
 
-    if has_key(g:rplugin, "R_bufname") && bufname("%") == g:rplugin.R_bufname
+    if has_key(g:rplugin, "R_bufnr") && bufnr("%") == g:rplugin.R_bufnr
         " Exit Terminal mode and go to Normal mode
         stopinsert
     endif
@@ -1106,7 +1097,7 @@ function ShowRDoc(rkeyword)
     endif
     let s:running_rhelp = 0
 
-    if bufname("%") =~ "Object_Browser" || (has_key(g:rplugin, "R_bufname") && bufname("%") == g:rplugin.R_bufname)
+    if bufname("%") =~ "Object_Browser" || (has_key(g:rplugin, "R_bufnr") && bufnr("%") == g:rplugin.R_bufnr)
         let savesb = &switchbuf
         set switchbuf=useopen,usetab
         exe "sb " . g:rplugin.rscript_name
@@ -1881,9 +1872,9 @@ function RClearConsole()
         return
     endif
     if has("win32") && type(g:R_external_term) == v:t_number && g:R_external_term == 1
-        call JobStdin(g:rplugin.jobs["ClientServer"], "76\n")
+        call JobStdin(g:rplugin.jobs["ClientServer"], "86\n")
         sleep 50m
-        call JobStdin(g:rplugin.jobs["ClientServer"], "77\n")
+        call JobStdin(g:rplugin.jobs["ClientServer"], "87\n")
     else
         call g:SendCmdToR("\014", 0)
     endif

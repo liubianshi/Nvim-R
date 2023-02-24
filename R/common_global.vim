@@ -687,7 +687,7 @@ function RVimLeave()
             if IsJobRunning(job)
                 if job == 'ClientServer' || job == 'BibComplete'
                     " Avoid warning of exit status 141
-                    call JobStdin(g:rplugin.jobs[job], "8\n")
+                    call JobStdin(g:rplugin.jobs[job], "9\n")
                     sleep 20m
                 endif
             endif
@@ -962,7 +962,8 @@ endif
 " The environment variables NVIMR_COMPLCB and NVIMR_COMPLInfo must be defined
 " before starting the nclientserver because it needs them at startup.
 " The options R_auto_omni and R_set_omnifunc must be defined before
-" finalizing the source common_buffer.vim.
+" finalizing the source of common_buffer.vim.
+" Note: The option R_auto_omni is undocumented since 2023-02-19
 if has('nvim') && type(luaeval("package.loaded['cmp_nvim_r']")) == v:t_dict
     let $NVIMR_COMPLCB = "v:lua.require'cmp_nvim_r'.asynccb"
     let $NVIMR_COMPLInfo = "v:lua.require'cmp_nvim_r'.complinfo"
