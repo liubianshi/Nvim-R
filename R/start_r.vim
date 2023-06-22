@@ -23,6 +23,22 @@ unlet g:SendFileToR
 " Functions to start and close R
 "==============================================================================
 
+function s:RGetBufDir()
+    if has('nvim')
+        let rwd = nvim_buf_get_name(0)
+        if has("win32")
+            let rwd = substitute(rwd, '\\', '/', 'g')
+        endif
+        let rwd = substitute(rwd, '\(.*\)/.*', '\1', '')
+    else
+        let rwd = expand("%:p:h")
+        if has("win32")
+            let rwd = substitute(rwd, '\\', '/', 'g')
+        endif
+    endif
+    return rwd
+endfunction
+
 " Start R
 function StartR(whatr)
     let s:wait_nvimcom = 1
@@ -124,7 +140,7 @@ function StartR(whatr)
 
     let rwd = ""
     if g:R_nvim_wd == 0
-        let rwd = expand("%:p:h")
+        let rwd = s:RGetBufDir()
     elseif g:R_nvim_wd == 1
         let rwd = getcwd()
     endif
@@ -137,6 +153,15 @@ function StartR(whatr)
         " with netrw plugin
         if isdirectory(rwd)
             let start_options += ['setwd("' . rwd . '")']
+        endif
+    endif
+
+    if len(g:R_after_start) > 0
+        let extracmds = deepcopy(g:R_after_start)
+        call filter(extracmds, 'v:val =~ "^R:"')
+        if len(extracmds) > 0
+            call map(extracmds, 'substitute(v:val, "^R:", "", "")')
+            let start_options += extracmds
         endif
     endif
 
@@ -310,19 +335,14 @@ function SetNvimcomInfo(nvimcomversion, nvimcomhome, bindportn, rpid, wid, r_inf
         call delete(g:rplugin.tmpdir . "/openR")
     endif
 
-    if type(g:R_after_start) == 1
-        " Backward compatibility: R_after_start was a string until November, 2019.
-        if g:R_after_start != ''
-            call system(g:R_after_start)
-        endif
-    elseif type(g:R_after_start) == 3
+    if type(g:R_after_start) == v:t_list
         for cmd in g:R_after_start
             if cmd =~ '^!'
                 call system(substitute(cmd, '^!', '', ''))
             elseif cmd =~ '^:'
                 exe substitute(cmd, '^:', '', '')
-            else
-                call RWarningMsg("R_after_start must be a list of strings starting with either '!' or ':'")
+            elseif cmd !~ '^R:'
+                call RWarningMsg("R_after_start must be a list of strings starting with 'R:', '!', or ':'")
             endif
         endfor
     endif
@@ -1324,8 +1344,11 @@ endfunction
 
 " Send file to R
 function SendFileToR(e)
-    let flines = getline(1, "$")
-    let fpath = expand("%:p") . ".tmp.R"
+    if has('nvim')
+        let fpath = nvim_buf_get_name(0) . ".tmp.R"
+    else
+        let fpath = expand("%:p") . ".tmp.R"
+    endif
 
     if filereadable(fpath)
         call RWarningMsg('Error: cannot create "' . fpath . '" because it already exists. Please, delete it.')
@@ -1335,7 +1358,7 @@ function SendFileToR(e)
     if has("win32")
         let fpath = substitute(fpath, "\\", "/", "g")
     endif
-    call writefile(flines, fpath)
+    call writefile(getline(1, "$"), fpath)
     call AddForDeletion(fpath)
     let sargs = GetSourceArgs(a:e)
     let ok = g:SendCmdToR('nvimcom:::source.and.clean("' . fpath .  '"' . sargs . ')')
@@ -1893,7 +1916,7 @@ endfunction
 
 " Set working directory to the path of current buffer
 function RSetWD()
-    let wdcmd = 'setwd("' . expand("%:p:h") . '")'
+    let wdcmd = 'setwd("' . s:RGetBufDir() . '")'
     if has("win32")
         let wdcmd = substitute(wdcmd, "\\", "/", "g")
     endif
@@ -1904,11 +1927,7 @@ endfunction
 " knit the current buffer content
 function RKnit()
     update
-    if has("win32")
-        call g:SendCmdToR('require(knitr); .nvim_oldwd <- getwd(); setwd("' . substitute(expand("%:p:h"), '\\', '/', 'g') . '"); knit("' . expand("%:t") . '"); setwd(.nvim_oldwd); rm(.nvim_oldwd)')
-    else
-        call g:SendCmdToR('require(knitr); .nvim_oldwd <- getwd(); setwd("' . expand("%:p:h") . '"); knit("' . expand("%:t") . '"); setwd(.nvim_oldwd); rm(.nvim_oldwd)')
-    endif
+    call g:SendCmdToR('require(knitr); .nvim_oldwd <- getwd(); setwd("' . s:RGetBufDir() . '"); knit("' . expand("%:t") . '"); setwd(.nvim_oldwd); rm(.nvim_oldwd)')
 endfunction
 
 function StartTxtBrowser(brwsr, url)
@@ -2135,10 +2154,7 @@ function RMakeRmd(t)
 
     update
 
-    let rmddir = expand("%:p:h")
-    if has("win32")
-        let rmddir = substitute(rmddir, '\\', '/', 'g')
-    endif
+    let rmddir = s:RGetBufDir()
     if a:t == "default"
         let rcmd = 'nvim.interlace.rmd("' . expand("%:t") . '", rmddir = "' . rmddir . '"'
     else
@@ -2199,6 +2215,13 @@ let g:R_objbr_auto_start  = get(g:, "R_objbr_auto_start",   0)
 let g:R_clear_line = get(g:, "R_clear_line", 0)
 
 let s:r_default_pkgs  = $R_DEFAULT_PACKAGES
+
+
+if type(g:R_after_start) != v:t_list
+    call RWarningMsg('R_after_start must be a list of strings')
+    sleep 1
+    let g:R_after_start = []
+endif
 
 " Make the file name of files to be sourced
 if exists("g:R_remote_tmpdir")

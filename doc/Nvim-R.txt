@@ -50,7 +50,6 @@ people might be interested in, you can write a script to be sourced by Nvim-R
       - Functions of loaded packages.
       - Special highlighting for R output (.Rout files).
       - Spell check only strings and comments.
-      - Fold code when foldmethod=syntax.
   * Integrated communication with R:
       - Start/Close R.
       - Send lines, selection, paragraphs, functions, blocks, entire file.
@@ -61,7 +60,6 @@ people might be interested in, you can write a script to be sourced by Nvim-R
       - R objects (.GlobalEnv and loaded packages).
       - function arguments (if R is running).
       - knitr chunk options.
-      - python code in knitr chunks if the jedi-vim plugin is installed (Rmd).
   * Limited support for debugging R functions.
   * Ability to see R's documentation in an editor buffer:
       - Automatic calculation of the best layout of the R documentation buffer
@@ -130,6 +128,11 @@ Main dependencies:~
        package: https://cran.r-project.org/bin/windows/Rtools/
 
 
+Additional dependencies for automatic code completion (Neovim only):~
+
+   - https://github.com/hrsh7th/nvim-cmp
+   - https://github.com/jalvesaq/cmp-nvim-r
+
 Additional dependencies for editing Rnoweb documents:~
 
    latexmk:       Automate the compilation of LaTeX documents.
@@ -142,7 +145,7 @@ Additional dependencies for editing Rnoweb documents:~
       On Windows: SumatraPDF.
 
 
-Additional suggestions for Unix (Linux, OS X, Cygwin, etc.):~
+Suggestions for Unix (Linux, OS X, Cygwin, etc.):~
 
    Tmux >= 3.0:  http://tmux.sourceforge.net
 		 Tmux is required only if you want to run R in an external
@@ -157,6 +160,14 @@ Additional suggestions for Unix (Linux, OS X, Cygwin, etc.):~
 If running Gnome Shell on Wayland, you may also want to install the extension
 "Activate Window By Title" which will be used to raise Zathura window
 displaying the PDF file generated from Rnoweb, Rmd or Quarto documents.
+
+
+Suggestions for bibliographic completion from Zotero:~
+
+For RMarkdown (`.Rmd`) and Quarto (`.qmd`) documents:
+
+   - https://github.com/jalvesaq/zotcite
+   - https://github.com/jalvesaq/cmp-zotcite
 
 
 ------------------------------------------------------------------------------
@@ -243,9 +254,19 @@ VOoM - Outliner~
 
 To use VOoM as outliner for Rmd documents, you should configure it to use the
 "pandoc" engine for outlining the structure of Rmd documents, and "latex" for
-Rnoweb ones. Example:
+Rnoweb ones. Example for |vimrc|:
 >
-   let voom_ft_modes = {'rmd': 'pandoc', 'rnoweb': 'latex'}
+   let voom_ft_modes = {'markdown': 'pandoc', 'rmd': 'pandoc',
+                      \ 'quarto': 'pandoc', 'rnoweb': 'latex'}
+<
+And for |init.lua|:
+>
+   vim.g.voom_ft_modes = {
+       markdown = 'pandoc',
+       rmd = 'pandoc',
+       quarto = 'pandoc',
+       rnoweb = 'latex'
+   }
 <
 You can install VOoM from: https://github.com/vim-voom/VOoM
 
@@ -609,8 +630,9 @@ such feature is the highlight of R functions.
 Note: If you have too many loaded packages Vim may be unable to load the
 list of functions for syntax highlight.
 
-Vim can automatically complete the names of R objects both as you type them
-if `cmp-nvim-r` (a source for `nvim-cmp`) is installed.
+If `cmp-nvim-r` (a source for `nvim-cmp`) is installed, Neovim can
+automatically complete the names of R objects as you type them (but
+conventional Vim omni completion does not work if `cmp-nvim-r` is installed).
 
 Nvim-R does not complete the names of all functions of all installed packages
 (see |R_start_libs|).
@@ -902,8 +924,16 @@ is to manually open R and install any package with the `install.packages()`
 command before using Nvim-R.
 
 
+5.6. The ~.Rprofile should not output anything (Windows only)~
+
+The compilation of `nvimcom` during R startup will fail on Windows if your
+`~/.Rprofile` outputs anything. Example of how to replicate the bug:
+>
+   print("Hello bug!")
+<
+
 ------------------------------------------------------------------------------
-5.6. R must be started by Vim~
+5.7. R must be started by Vim~
 
 The communication between Vim and R will work only if R was started by
 Vim through the <LocalLeader>rf command because the plugin was designed to
@@ -995,7 +1025,7 @@ of
 |R_strict_rst|          Code style for generated rst files
 |R_insert_mode_cmds|    Allow R commands in insert mode
 |R_rmhidden|            Remove hidden objects from R workspace
-|R_source|              Source additional scripts
+|R_source|              Source additional Vim scripts
 |R_non_r_compl|         Bibliography completion
 |R_wait|                Time to wait for nvimcom loading
 |R_wait_reply|          Time to wait for R reply
@@ -2059,7 +2089,7 @@ https://unix.stackexchange.com/questions/104094/is-there-any-way-to-enable-ctrll
 
 ------------------------------------------------------------------------------
 								    *R_source*
-6.28. Source additional scripts~
+6.28. Source additional Vim scripts~
 
 This variable should contain a comma separated list of Vim scripts to be
 sourced by Nvim-R. These scripts may provide additional
@@ -2192,13 +2222,34 @@ in |vimrc|:
 							     *R_after_ob_open*
 6.33 Commands to be executed after either R startup or Object Browser opening~
 
-If you want that Vim executes either Vim or external commands right after R
-startup, set the value of R_after_start in your |vimrc|. The `R_after_start`
+If you want the execution of Vim, R, or external commands right after R
+startup, set the value of `R_after_start` in your |vimrc|. The `R_after_start`
 variable must be a list of strings. Strings representing Vim commands must
-start with `:` and strings representing external commands must start with `!`.
+start with `:`, R commands must be prefixed with `R:`, and external commands
+must be prefixed with `!`.
 
-For example, if you want that the R script window is hidden right after R
-startup, put in your |vimrc|:
+You can put commands in your `~/.Rprofile` that will be run only if R was
+started by Nvim-R as in the example below:
+>
+   if (Sys.getenv("NVIMR_TMPDIR") == "")
+       cat("~/Rprofile: R was called by Nvim-R\n", file = stderr())
+>
+However, if for any reason you `~/.Rprofile` is not being sourced, you can
+include in `R_after_start` R commands that should be executed during R startup
+(more precisely, during `nvimcom` loading). Example:
+>
+   let R_after_start = ['R: cat("R_after_start: R was called by Nvim-R\n", file = stderr())']
+<
+If using `init.lua`:
+>
+   vim.g.R_after_start = {'R: cat("R_after_start: R was called by Nvim-R\\n", file = stderr())'}
+<
+Note: The loading of `nvimcom` will fail if the command to be executed is
+invalid. In the example above, we have had to use `\n` in VimScript but `\\n`
+in Lua.
+
+For an example of Vim command, if you want that the R script window is hidden
+right after R startup, put in your |vimrc|:
 >
    let R_after_start = [':hide']
 <
@@ -2346,9 +2397,9 @@ not be installed, and you should set `R_set_omnifunc` as an empty list in your
 >
    let R_set_omnifunc = []
 <
-Even without `cmp-nvim-r` or the `languageserver`, you still can define in
-your |vimrc| the list of file types supported by Nvim-R that should have the
-traditional Vim's omni completion enabled. Example:
+If `cmp-nvim-r` is not installed, you still can define in your |vimrc| the
+list of file types supported by Nvim-R that should have the traditional Vim's
+omni completion enabled. Example:
 >
    let R_set_omnifunc = ["r",  "rmd", "quarto", "rnoweb", "rhelp", "rrst"]
 <
@@ -2766,8 +2817,8 @@ See also: |R_source|.
 								 *Nvim-R-news*
 8. News~
 
- * Integration with cmp-nvim-r, a source for nvim-cmp;
-   remove documentation on R_auto_omni.
+ * Integration with cmp-nvim-r, a source for nvim-cmp.
+ * Delete option R_auto_omni.
  * New options: R_filetypes, R_fun_data_1 and R_fun_data_2, R_quarto_intel,
    R_bib_compl, R_enable_comment.
 
