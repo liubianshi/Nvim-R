@@ -346,18 +346,7 @@ filter.objlist <- function(x) {
     x[!grepl("^[\\[\\(\\{:-@%/=+\\$<>\\|~\\*&!\\^\\-]", x) & !grepl("^\\.__", x)]
 }
 
-nvim.buildargs <- function(pkg) {
-    if (length(pkg) > 1) {
-        for (p in pkg)
-            nvim.buildargs(p)
-        return(invisible(NULL))
-    }
-
-    afile <- paste0(Sys.getenv("NVIMR_COMPLDIR"), "/", "args_", pkg, "_",
-                utils::packageDescription(pkg)$Version)
-    if (file.exists(afile))
-        return(invisible(NULL))
-
+nvim.buildargs <- function(afile, pkg) {
     ok <- try(require(pkg, warn.conflicts = FALSE,
                       quietly = TRUE, character.only = TRUE))
     if (!ok)
@@ -382,7 +371,7 @@ nvim.buildargs <- function(pkg) {
         if (is.primitive(x)) {
             a <- args(x)
             if (is.null(a))
-                return(invisible(NULL))
+                next
             frm <- formals(a)
         } else
             frm <- formals(x)
@@ -413,7 +402,7 @@ nvim.bol <- function(omnilist, packlist, allnames = FALSE) {
 
     for (curpack in listpack) {
         curlib <- sub("^package:", "", curpack)
-        if (nvim.grepl(curlib, loadpack) == FALSE) {
+        if (nvim.grepl(paste0(curpack, "$"), loadpack) == FALSE) {
             ok <- try(require(curlib, warn.conflicts = FALSE,
                                       quietly = TRUE, character.only = TRUE))
             if (!ok)
@@ -425,6 +414,7 @@ nvim.bol <- function(omnilist, packlist, allnames = FALSE) {
 
         l <- length(obj.list)
         if (l > 0) {
+            # Build omnils_ for both omni completion and Object Browser
             sink(omnilist, append = FALSE)
             for (obj in obj.list) {
                 ol <- try(nvim.omni.line(obj, curpack, curlib, 0))
@@ -472,7 +462,7 @@ nvim.bol <- function(omnilist, packlist, allnames = FALSE) {
     return(invisible(NULL))
 }
 
-# This function calls nvim.bol which writes two files in ~/.cache/Nvim-R:
+# This function calls nvim.bol which writes three files in ~/.cache/Nvim-R:
 #   - fun_    : function names for syntax highlighting
 #   - omnils_ : data for omni completion and object browser
 nvim.buildomnils <- function(p) {

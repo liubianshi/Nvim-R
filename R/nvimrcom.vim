@@ -34,35 +34,45 @@ endfunction
 let s:incomplete_input = {'size': 0, 'received': 0, 'str': ''}
 let s:waiting_more_input = 0
 function ROnJobStdout(job_id, data, etype)
-    " DEBUG: call writefile(a:data, "/dev/shm/nclientserver_stdout", "a")
+    " DEBUG: call writefile(a:data, "/dev/shm/nvimrserver_stdout", "a")
     for cmd in a:data
         let cmd = substitute(cmd, '\r', '', 'g')
         if cmd == ""
             continue
         endif
+
         if cmd[0] == "\005"
             " Check the size of possibly very big string (dictionary for menu completion).
             let cmdsplt = split(cmd, "\005")
             let size = str2nr(cmdsplt[0])
             let received = strlen(cmdsplt[1])
             if size == received
-                exe cmdsplt[1]
+                let cmd = cmdsplt[1]
             else
                 let s:waiting_more_input = 1
                 let s:incomplete_input['size'] = size
                 let s:incomplete_input['received'] = received
                 let s:incomplete_input['str'] = cmdsplt[1]
-                call timer_start(20, 'StopWaitingNCS')
+                call timer_start(100, 'StopWaitingNCS')
+                return
             endif
-        elseif s:waiting_more_input
+        endif
+
+        if s:waiting_more_input
             let s:incomplete_input['received'] += strlen(cmd)
             if s:incomplete_input['received'] == s:incomplete_input['size']
                 let s:waiting_more_input = 0
-                exe s:incomplete_input['str'] . cmd
+                let cmd = s:incomplete_input['str'] . cmd
             else
                 let s:incomplete_input['str'] .= cmd
+                if s:incomplete_input['received'] > s:incomplete_input['size']
+                    call RWarningMsg('Received larger than expected message.')
+                endif
+                return
             endif
-        elseif cmd =~ "^call " || cmd  =~ "^let " || cmd =~ "^unlet "
+        endif
+
+        if cmd =~ "^call " || cmd  =~ "^let " || cmd =~ "^unlet "
             exe cmd
         else
             if len(cmd) > 128
@@ -91,13 +101,16 @@ function ROnJobExit(job_id, data, etype)
     if key ==# 'R' || key ==# 'RStudio'
         call ClearRInfo()
     endif
+    if key ==# 'Server'
+        let g:rplugin.nrs_running = 0
+    endif
 endfunction
 
 function IsJobRunning(key)
     return g:rplugin.jobs[a:key]
 endfunction
 
-let g:rplugin.jobs = {"ClientServer": 0, "R": 0, "Terminal emulator": 0, "BibComplete": 0}
+let g:rplugin.jobs = {"Server": 0, "R": 0, "Terminal emulator": 0, "BibComplete": 0}
 let g:rplugin.job_handlers = {
             \ 'on_stdout': function('ROnJobStdout'),
             \ 'on_stderr': function('ROnJobStderr'),

@@ -60,15 +60,17 @@ function! UpdateOB(what)
     endif
 
     if wht == "GlobalEnv"
-        let fcntt = readfile(g:rplugin.tmpdir . "/globenv_" . $NVIMR_ID)
+        let fcntt = readfile(g:rplugin.localtmpdir . "/globenv_" . $NVIMR_ID)
     else
-        let fcntt = readfile(g:rplugin.tmpdir . "/liblist_" . $NVIMR_ID)
+        let fcntt = readfile(g:rplugin.localtmpdir . "/liblist_" . $NVIMR_ID)
     endif
     if has("nvim")
-        let obcur = nvim_win_get_cursor(g:rplugin.ob_winnr)
+        if nvim_win_is_valid(g:rplugin.ob_winnr)
+            let obcur = nvim_win_get_cursor(g:rplugin.ob_winnr)
+        endif
         call nvim_buf_set_option(g:rplugin.ob_buf, "modifiable", v:true)
         call nvim_buf_set_lines(g:rplugin.ob_buf, 0, nvim_buf_line_count(g:rplugin.ob_buf), 0, fcntt)
-        if obcur[0] <= len(fcntt)
+        if nvim_win_is_valid(g:rplugin.ob_winnr) && obcur[0] <= len(fcntt)
             call nvim_win_set_cursor(g:rplugin.ob_winnr, obcur)
         endif
         call nvim_buf_set_option(g:rplugin.ob_buf, "modifiable", v:false)
@@ -103,7 +105,6 @@ function! UpdateOB(what)
         endif
     endif
     let s:upobcnt = 0
-    return "End of UpdateOB()"
 endfunction
 
 function! RBrowserDoubleClick()
@@ -115,10 +116,10 @@ function! RBrowserDoubleClick()
     if line(".") == 1
         if g:rplugin.curview == "libraries"
             let g:rplugin.curview = "GlobalEnv"
-            call JobStdin(g:rplugin.jobs["ClientServer"], "31\n")
+            call JobStdin(g:rplugin.jobs["Server"], "31\n")
         else
             let g:rplugin.curview = "libraries"
-            call JobStdin(g:rplugin.jobs["ClientServer"], "321\n")
+            call JobStdin(g:rplugin.jobs["Server"], "321\n")
         endif
         return
     endif
@@ -131,7 +132,7 @@ function! RBrowserDoubleClick()
             call SendToNvimcom("L", key)
         elseif curline =~ "\[#.*\t" || curline =~ "\$#.*\t" || curline =~ "<#.*\t" || curline =~ ":#.*\t"
             let key = substitute(key, '`', '', 'g')
-            call JobStdin(g:rplugin.jobs["ClientServer"], "33G" . key . "\n")
+            call JobStdin(g:rplugin.jobs["Server"], "33G" . key . "\n")
         else
             call g:SendCmdToR("str(" . key . ")")
         endif
@@ -141,7 +142,7 @@ function! RBrowserDoubleClick()
             call AskRDoc(key, RBGetPkgName(), 0)
         else
             if key =~ ":$" || curline =~ "\[#.*\t" || curline =~ "\$#.*\t" || curline =~ "<#.*\t" || curline =~ ":#.*\t"
-                call JobStdin(g:rplugin.jobs["ClientServer"], "33L" . key . "\n")
+                call JobStdin(g:rplugin.jobs["Server"], "33L" . key . "\n")
             else
                 call g:SendCmdToR("str(" . key . ")")
             endif
@@ -300,13 +301,13 @@ function! RBrowserGetName()
 endfunction
 
 function! OnOBBufUnload()
-    if g:R_hi_fun_globenv < 2
+    if g:rplugin.update_glbenv == 0
         call SendToNvimcom("N", "OnOBBufUnload")
     endif
 endfunction
 
 function! PrintListTree()
-    call JobStdin(g:rplugin.jobs["ClientServer"], "37\n")
+    call JobStdin(g:rplugin.jobs["Server"], "37\n")
 endfunction
 
 nnoremap <buffer><silent> <CR> :call RBrowserDoubleClick()<CR>

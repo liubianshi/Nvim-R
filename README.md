@@ -6,7 +6,8 @@ R scripts.
 ## Installation
 
 If you use a plugin manager, follow its instructions on how to install plugins
-from github.
+from GitHub. Users of [lazy.nvim](https://github.com/folke/lazy.nvim) who
+opted for `defaults.lazy=true` have to configure Nvim-R with `lazy=false`.
 
 The `stable` branch is a copy of the last released version plus minor bug
 fixes eventually found after the release.
@@ -39,12 +40,12 @@ The animated GIF below shows R running in a Neovim terminal buffer. We can note:
       turns blue because it is immediately recognized as a loaded function
       (the Vim color scheme used is [southernlights]).
 
-   3. When Mozambique's data.frame is created, it is automatically displayed
+   3. When Mozambique's `data.frame` is created, it is automatically displayed
       in the Object Browser. Messages about unrecognized types are in magenta
       because they were sent to *stderr*, and the line *Warning messages* is in
       red because colorout recognized it as a warning.
 
-   4. When the "label" attributes are applied to the data.frame elements, the
+   4. When the "label" attributes are applied to the `data.frame` elements, the
       labels show up in the Object Browser.
 
    5. The next images show results of omni completion.
@@ -55,41 +56,43 @@ The animated GIF below shows R running in a Neovim terminal buffer. We can note:
 
 ## The communication between R and either Vim or Neovim
 
-In addition to sending lines of code to R Console, Nvim-R and R communicate
-with each other through TCP connections. The R package *nvimcom* runs a TCP
-server that receives messages from Vim/Neovim, and it also sends messages
-through a TCP connection to Vim/Neovim. Moreover, *nvimcom* includes the
-application *nclientserver* which is never used by R itself, but is run by
-Vim/Neovim, providing both a TCP client and a TCP server. The Diagram below
-shows the three paths of communication between Vim/Neovim and R:
-
-  - The black path is followed by all commands that you trigger in the editor
-    and that you can see being pasted into R Console. There are three
-    different ways of sending the commands to R Console:
-
-     - When running R in a Neovim built-in terminal, the function `chansend()`
-       is used to send code to R Console.
-
-     - When running R in an external terminal emulator, Tmux is used to send
-       commands to R Console.
-
-     - On Windows operating system, Nvim-R can send a message to R (nvimcom)
-       which forwards the command to R Console.
-
-  - The blue path is followed by the few commands that you trigger, but that
-    are not pasted into R Console and do not output anything in R Console;
-    their results are seen in the editor itself. These are the commands to do
-    omnicompletion (of names of objects and function arguments), start and
-    manipulate the Object Browser (`\ro`, `\r=` and `\r-`), call R help (`\rh`
-    or `:Rhelp`), insert the output of an R command (`:Rinsert`) and format
-    selected text (`:Rformat`).
-
-  - The red path is followed by R messages that tell the editor to update the
-    Object Browser, update the syntax highlight to include newly loaded
-    libraries and open the PDF output after knitting an Rnoweb file and
-    compiling the LaTeX result.
-
+The diagram below shows how the communication between Vim/Neovim and R works.
 ![Neovim-R communication](https://raw.githubusercontent.com/jalvesaq/Nvim-R/master/nvimrcom.png "Neovim-R communication")
+
+The black arrow represents all commands that you trigger in the editor and
+that you can see being pasted into R Console.
+There are three different ways of sending the commands to R Console:
+
+  - When running R in a Neovim built-in terminal, the function `chansend()`
+    is used to send code to R Console.
+
+  - When running R in an external terminal emulator, Tmux is used to send
+    commands to R Console.
+
+  - On the Windows operating system, Nvim-R can send a message to R (nvimcom)
+    which forwards the command to R Console.
+
+The R package *nvimcom* includes the application *nvimrserver* which is never
+used by R itself, but is run as a Vim/Neovim's job. That is, the communication
+between the *nvimrserver* and Vim/Neovim is through the *nvimrserver* standard
+input and output (green arrows). The *nvimrserver* application runs a TCP
+server. When *nvimcom* is loaded, it immediately starts a TCP client that
+connects to *nvimrserver* (red arrows).
+
+Some commands that you trigger are not pasted into R Console and do not output
+anything in R Console; their results are seen in the editor itself. These are
+the commands to do omnicompletion (of names of objects and function
+arguments), start and manipulate the Object Browser (`\ro`, `\r=` and `\r-`),
+call R help (`\rh` or `:Rhelp`), insert the output of an R command
+(`:Rinsert`) and format selected text (`:Rformat`).
+
+When new objects are created or new libraries are loaded, nvimcom sends
+messages that tell the editor to update the Object Browser, update the syntax
+highlight to include newly loaded libraries and open the PDF output after
+knitting an Rnoweb file and compiling the LaTeX result. Most of the
+information is transmitted through the TCP connection to the *nvimrserver*,
+but temporary files are used in a few cases.
+
 
 ## See also:
 

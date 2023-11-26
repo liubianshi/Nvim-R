@@ -16,10 +16,11 @@ endif
 let s:did_global_stuff = 1
 
 if !exists('g:rplugin')
-    " Also in functions.vim
-    let g:rplugin = {'debug_info': {}, 'libs_in_ncs': []}
+    " Attention: also in functions.vim because either of them might be sourced first.
+    let g:rplugin = {'debug_info': {}, 'libs_in_nrs': [], 'nrs_running': 0, 'myport': 0, 'R_pid': 0}
 endif
 
+let g:rplugin.debug_info['Time'] = {'common_global': reltime()}
 
 "==============================================================================
 " Check if there is more than one copy of Nvim-R
@@ -162,23 +163,29 @@ endfunction
 "==============================================================================
 
 if has("nvim")
-    if !has("nvim-0.5.0")
-        call RWarningMsg("Nvim-R requires Neovim >= 0.5.0.")
+    if !has("nvim-0.6.0")
+        call RWarningMsg("Nvim-R requires Neovim >= 0.6.0.")
         let g:rplugin.failed = 1
         finish
     endif
 elseif v:version < "802"
-    call RWarningMsg("Nvim-R requires either Neovim >= 0.5.0 or Vim >= 8.2.84")
+    call RWarningMsg("Nvim-R requires either Neovim >= 0.6.0 or Vim >= 8.2.84")
     let g:rplugin.failed = 1
     finish
 elseif !has("channel") || !has("job") || !has('patch-8.2.84')
-    call RWarningMsg("Nvim-R requires either Neovim >= 0.5.0 or Vim >= 8.2.84\nIf using Vim, it must have been compiled with both +channel and +job features.\n")
+    call RWarningMsg("Nvim-R requires either Neovim >= 0.6.0 or Vim >= 8.2.84\nIf using Vim, it must have been compiled with both +channel and +job features.\n")
     let g:rplugin.failed = 1
     finish
 endif
 
-" Convert _ into <- 
+" Convert _ into <-
 function ReplaceUnderS()
+    if g:R_assign == 0
+        " See https://github.com/jalvesaq/Nvim-R/issues/668
+        exe 'iunmap <buffer> ' g:R_assign_map
+        exe "normal! a" . g:R_assign_map
+        return
+    endif
     if &filetype != "r" && b:IsInRCode(0) != 1
         let isString = 1
     else
@@ -230,56 +237,6 @@ function ReplaceUnderS()
     else
         exe "normal! a <- "
     endif
-endfunction
-
-" Get first and last selected lines
-function RGetFL(mode)
-    if a:mode == "normal"
-        let fline = line(".")
-        let lline = line(".")
-    else
-        let fline = line("'<")
-        let lline = line("'>")
-    endif
-    if fline > lline
-        let tmp = lline
-        let lline = fline
-        let fline = tmp
-    endif
-    return [fline, lline]
-endfunction
-
-" Each file type defines a function to say whether the cursor is in a block of
-" R code. Useful for Rmd, Rnw, Rhelp, Rdoc, etc...
-function IsLineInRCode(vrb, line)
-    let save_cursor = getpos(".")
-    call setpos(".", [0, a:line, 1, 0])
-    let isR = b:IsInRCode(a:vrb) == 1
-    call setpos('.', save_cursor)
-    return isR
-endfunction
-
-function IsSendCmdToRFake()
-    if string(g:SendCmdToR) != "function('SendCmdToR_fake')"
-        let qcmd = "\\rq"
-        let nkblist = execute("nmap")
-        let nkbls = split(nkblist, "\n")
-        for nkb in nkbls
-            if stridx(nkb, "RQuit('nosave')") > 0
-                let qls = split(nkb, " ")
-                let qcmd = qls[1]
-                break
-            endif
-        endfor
-        call RWarningMsg("As far as I know, R is already running. If it is not running, did you quit it from within ". v:progname . " (command " . qcmd . ")?")
-        return 1
-    endif
-    return 0
-endfunction
-
-function SendCmdToR_NotYet(...)
-    call RWarningMsg("Not ready yet")
-    return 0
 endfunction
 
 " Get the word either under or after the cursor.
@@ -700,7 +657,7 @@ function RVimLeave()
     if has('nvim')
         for job in keys(g:rplugin.jobs)
             if IsJobRunning(job)
-                if job == 'ClientServer' || job == 'BibComplete'
+                if job == 'Server' || job == 'BibComplete'
                     " Avoid warning of exit status 141
                     call JobStdin(g:rplugin.jobs[job], "9\n")
                     sleep 20m
@@ -714,6 +671,9 @@ function RVimLeave()
     endfor
     if executable("rmdir")
         call system("rmdir '" . g:rplugin.tmpdir . "'")
+        if g:rplugin.localtmpdir != g:rplugin.tmpdir
+            call system("rmdir '" . g:rplugin.localtmpdir . "'")
+        endif
     endif
 endfunction
 
@@ -739,25 +699,24 @@ function ShowRDebugInfo()
         echohl Title
         echo key
         echohl None
-        echo g:rplugin.debug_info[key]
+        if key == 'Time' || key == 'nvimcom_info'
+            for step in keys(g:rplugin.debug_info[key])
+                echohl Identifier
+                echo '  ' . step . ': '
+                if key == 'Time'
+                    echohl Number
+                else
+                    echohl String
+                endif
+                echon g:rplugin.debug_info[key][step]
+                echohl None
+            endfor
+            echo ""
+        else
+            echo g:rplugin.debug_info[key]
+        endif
         echo ""
     endfor
-endfunction
-
-function UpdateRGlobalEnv(block)
-    if string(g:SendCmdToR) == "function('SendCmdToR_fake')"
-        return
-    endif
-    call RealUpdateRGlbEnv(a:block)
-endfunction
-
-function ROnInsertEnter()
-    if string(g:SendCmdToR) == "function('SendCmdToR_fake')"
-        return
-    endif
-    if g:R_hi_fun_globenv != 0
-        call RealUpdateRGlbEnv(0)
-    endif
 endfunction
 
 " Function to send commands
@@ -771,12 +730,8 @@ function AutoStartR(...)
     if string(g:SendCmdToR) != "function('SendCmdToR_fake')"
         return
     endif
-    if v:vim_did_enter == 0
+    if v:vim_did_enter == 0 || g:rplugin.nrs_running == 0
         call timer_start(100, 'AutoStartR')
-        return
-    endif
-    if exists('g:rplugin.starting_ncs') && g:rplugin.starting_ncs == 1
-        call timer_start(200, 'AutoStartR')
         return
     endif
     call StartR("R")
@@ -802,22 +757,27 @@ function RNotRunning(...)
 endfunction
 
 let g:RAction = function('RNotRunning')
+let g:RAskHelp = function('RNotRunning')
 let g:RBrOpenCloseLs = function('RNotRunning')
+let g:RBuildTags = function('RNotRunning')
 let g:RClearAll = function('RNotRunning')
 let g:RClearConsole = function('RNotRunning')
+let g:RFormatCode = function('RNotRunning')
+let g:RInsert = function('RNotRunning')
 let g:RMakeRmd = function('RNotRunning')
 let g:RObjBrowser = function('RNotRunning')
 let g:RQuit = function('RNotRunning')
 let g:RSendPartOfLine = function('RNotRunning')
+let g:RSourceDirectory = function('RNotRunning')
+let g:SendCmdToR = function('SendCmdToR_fake')
+let g:SendFileToR = function('SendCmdToR_fake')
 let g:SendFunctionToR = function('RNotRunning')
 let g:SendLineToR = function('RNotRunning')
 let g:SendLineToRAndInsertOutput = function('RNotRunning')
 let g:SendMBlockToR = function('RNotRunning')
 let g:SendParagraphToR = function('RNotRunning')
 let g:SendSelectionToR = function('RNotRunning')
-let g:SendCmdToR = function('SendCmdToR_fake')
-let g:SendFileToR = function('SendCmdToR_fake')
-
+let g:SignalToR = function('RNotRunning')
 
 
 "==============================================================================
@@ -859,10 +819,26 @@ else
     endif
 endif
 
-let $NVIMR_TMPDIR = g:rplugin.tmpdir
-if !isdirectory(g:rplugin.tmpdir)
-    call mkdir(g:rplugin.tmpdir, "p", 0700)
+" When accessing R remotely, a local tmp directory is used by the
+" nvimrserver to save the contents of the ObjectBrowser to avoid traffic
+" over the ssh connection
+let g:rplugin.localtmpdir = g:rplugin.tmpdir
+
+if exists("g:R_remote_compldir")
+    let $NVIMR_REMOTE_COMPLDIR = g:R_remote_compldir
+    let $NVIMR_REMOTE_TMPDIR = g:R_remote_compldir . '/tmp'
+    let g:rplugin.tmpdir = g:R_compldir . '/tmp'
+    if !isdirectory(g:rplugin.tmpdir)
+        call mkdir(g:rplugin.tmpdir, "p", 0700)
+    endif
+else
+    let $NVIMR_REMOTE_COMPLDIR = g:rplugin.compldir
+    let $NVIMR_REMOTE_TMPDIR = g:rplugin.tmpdir
 endif
+if !isdirectory(g:rplugin.localtmpdir)
+    call mkdir(g:rplugin.localtmpdir, "p", 0700)
+endif
+let $NVIMR_TMPDIR = g:rplugin.tmpdir
 
 " Delete options with invalid values
 if exists("g:R_set_omnifunc") && type(g:R_set_omnifunc) != v:t_list
@@ -870,13 +846,17 @@ if exists("g:R_set_omnifunc") && type(g:R_set_omnifunc) != v:t_list
     unlet g:R_set_omnifunc
 endif
 
-" Variables whose default value are fixed
+" Default values of some variables
+
 let g:R_assign            = get(g:, "R_assign",             1)
+if type(g:R_assign) == v:t_number && g:R_assign == 2
+    let g:R_assign_map = '_'
+endif
 let g:R_assign_map        = get(g:, "R_assign_map",       "_")
+
 let g:R_synctex           = get(g:, "R_synctex",            1)
 let g:R_non_r_compl       = get(g:, "R_non_r_compl",        1)
 let g:R_nvim_wd           = get(g:, "R_nvim_wd",            0)
-let g:R_commented_lines   = get(g:, "R_commented_lines",    0)
 let g:R_auto_start        = get(g:, "R_auto_start",         0)
 let g:R_routnotab         = get(g:, "R_routnotab",          0)
 let g:R_objbr_w           = get(g:, "R_objbr_w",           40)
@@ -891,7 +871,6 @@ let g:R_disable_cmds      = get(g:, "R_disable_cmds",    [''])
 let g:R_enable_comment    = get(g:, "R_enable_comment",     0)
 let g:R_openhtml          = get(g:, "R_openhtml",           1)
 let g:R_hi_fun_paren      = get(g:, "R_hi_fun_paren",       0)
-let g:R_hi_fun_globenv    = get(g:, "R_hi_fun_globenv",     0)
 let g:R_bib_compl         = get(g:, "R_bib_compl", ["rnoweb"])
 
 if type(g:R_bib_compl) == v:t_string
@@ -899,7 +878,7 @@ if type(g:R_bib_compl) == v:t_string
 endif
 
 let g:R_fun_data_1 = get(g:, 'R_fun_data_1', ['select', 'rename', 'mutate', 'filter'])
-let g:R_fun_data_2 = get(g:, 'R_fun_data_2', {'ggplot': ['aes'], 'with': ['lm', 'glm', 'lmer']})
+let g:R_fun_data_2 = get(g:, 'R_fun_data_2', {'ggplot': ['aes'], 'with': ['*']})
 
 if exists(":terminal") != 2
     let g:R_external_term = get(g:, "R_external_term", 1)
@@ -943,20 +922,6 @@ let g:R_latexcmd         = get(g:, "R_latexcmd",          ["default"])
 let g:R_texerr           = get(g:, "R_texerr",                      1)
 let g:R_rmd_environment  = get(g:, "R_rmd_environment",  ".GlobalEnv")
 let g:R_rmarkdown_args   = get(g:, "R_rmarkdown_args",             "")
-let g:R_indent_commented = get(g:, "R_indent_commented",            1)
-
-if !exists("g:r_indent_ess_comments")
-    let g:r_indent_ess_comments = 0
-endif
-if g:r_indent_ess_comments
-    if g:R_indent_commented
-        let g:R_rcomment_string = get(g:, "R_rcomment_string", "## ")
-    else
-        let g:R_rcomment_string = get(g:, "R_rcomment_string", "### ")
-    endif
-else
-    let g:R_rcomment_string = get(g:, "R_rcomment_string", "# ")
-endif
 
 if type(g:R_external_term) == v:t_number && g:R_external_term == 0
     let g:R_save_win_pos = 0
@@ -971,17 +936,22 @@ else
 endif
 
 " The environment variables NVIMR_COMPLCB and NVIMR_COMPLInfo must be defined
-" before starting the nclientserver because it needs them at startup.
+" before starting the nvimrserver because it needs them at startup.
 " The R_set_omnifunc must be defined before finalizing the source of common_buffer.vim.
+let g:rplugin.update_glbenv = 0
 if has('nvim') && type(luaeval("package.loaded['cmp_nvim_r']")) == v:t_dict
     let $NVIMR_COMPLCB = "v:lua.require'cmp_nvim_r'.asynccb"
     let $NVIMR_COMPLInfo = "v:lua.require'cmp_nvim_r'.complinfo"
     let g:R_set_omnifunc = []
-    let g:R_hi_fun_globenv = 2
+    let g:rplugin.update_glbenv = 1
 else
     let $NVIMR_COMPLCB = 'SetComplMenu'
     let $NVIMR_COMPLInfo = "SetComplInfo"
     let g:R_set_omnifunc = get(g:, "R_set_omnifunc", ["r",  "rmd", "quarto", "rnoweb", "rhelp", "rrst"])
+endif
+
+if len(g:R_set_omnifunc) > 0
+    let g:rplugin.update_glbenv = 1
 endif
 
 " Look for invalid options
@@ -1005,7 +975,6 @@ for pos in objbrplace
 endfor
 unlet pos
 unlet objbrplace
-
 
 "==============================================================================
 " Check if default mean of communication with R is OK
@@ -1034,9 +1003,6 @@ endif
 if v:windowid != 0 && $WINDOWID == ""
     let $WINDOWID = v:windowid
 endif
-
-let g:rplugin.myport = 0
-let g:rplugin.nvimcom_port = 0
 
 " Current view of the object browser: .GlobalEnv X loaded libraries
 let g:rplugin.curview = "None"
@@ -1113,17 +1079,24 @@ endif
 autocmd FuncUndefined StartR exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/start_r.vim"
 
 function GlobalRInit(...)
-    exe 'source ' . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/start_ncs.vim"
+    let g:rplugin.debug_info['Time']['start_nrs'] = reltime()
+    exe 'source ' . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/start_nrs.vim"
+    " Set security variables
+    if has('nvim') && !has("nvim-0.7.0")
+        let $NVIMR_ID = substitute(string(reltimefloat(reltime())), '.*\.', '', '')
+        let $NVIMR_SECRET = substitute(string(reltimefloat(reltime())), '.*\.', '', '')
+    else
+        let $NVIMR_ID = rand(srand())
+        let $NVIMR_SECRET = rand()
+    end
+    let g:rplugin.debug_info['Time']['R_before_nrs'] = reltime()
     call CheckNvimcomVersion()
+    let g:rplugin.debug_info['Time']['start_nrs'] = reltimefloat(reltime(g:rplugin.debug_info['Time']['start_nrs'], reltime()))
 endfunction
 
-function PreGlobalRealInit()
-    call timer_start(1, "GlobalRInit")
-endfunction
-
-let g:rplugin.starting_ncs = 1
 if v:vim_did_enter == 0
-    autocmd VimEnter * call PreGlobalRealInit()
+    autocmd VimEnter * call timer_start(1, "GlobalRInit")
 else
-    call GlobalRInit()
+    call timer_start(1, "GlobalRInit")
 endif
+let g:rplugin.debug_info['Time']['common_global'] = reltimefloat(reltime(g:rplugin.debug_info['Time']['common_global'], reltime()))
