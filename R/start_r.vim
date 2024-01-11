@@ -1160,7 +1160,7 @@ function RSourceLines(...)
     if &filetype == "rmd" || &filetype == "quarto"
         let lines = map(copy(lines), 'substitute(v:val, "^(\\`\\`)\\?", "", "")')
     endif
-    if !g:R_commented_lines
+    if exists('g:R_commented_lines') && !g:R_commented_lines
         let newlines = []
         for line in lines
             if line !~ "^\s*#[^']"
