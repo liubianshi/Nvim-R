@@ -20,7 +20,7 @@ if !exists('g:rplugin')
     let g:rplugin = {'debug_info': {}, 'libs_in_nrs': [], 'nrs_running': 0, 'myport': 0, 'R_pid': 0}
 endif
 
-let g:rplugin.debug_info['Time'] = {'common_global': reltime()}
+let g:rplugin.debug_info['Time'] = {'common_global.vim': reltime()}
 
 "==============================================================================
 " Check if there is more than one copy of Nvim-R
@@ -62,8 +62,8 @@ endfunction
 
 function FormatTxt(text, splt, jn, maxl)
     let maxlen = a:maxl - len(a:jn)
-    let atext = substitute(a:text, "\004", "'", "g")
-    let plist = split(atext, "\002")
+    let atext = substitute(a:text, "\x13", "'", "g")
+    let plist = split(atext, "\x14")
     let txt = ''
     for prg in plist
         let txt .= "\n " . FormatPrgrph(prg, a:splt, a:jn, maxlen)
@@ -108,7 +108,7 @@ function RFloatWarn(wmsg)
             call setbufvar(s:warn_buf, '&tabstop', 2)
             call setbufvar(s:warn_buf, '&undolevels', -1)
         endif
-        call nvim_buf_set_option(s:warn_buf, 'syntax', 'off')
+        call nvim_set_option_value('syntax', 'off', {'buf': s:warn_buf})
         call nvim_buf_set_lines(s:warn_buf, 0, -1, v:true, fmsgl)
         let opts = {'relative': 'editor', 'width': realwidth, 'height': wht,
                     \ 'col': winwidth(0) - realwidth,
@@ -670,9 +670,17 @@ function RVimLeave()
         call delete(fn)
     endfor
     if executable("rmdir")
-        call system("rmdir '" . g:rplugin.tmpdir . "'")
+        if has('nvim')
+            call jobstart("rmdir '" . g:rplugin.tmpdir . "'", {'detach': v:true})
+        else
+            call system("rmdir '" . g:rplugin.tmpdir . "'")
+        endif
         if g:rplugin.localtmpdir != g:rplugin.tmpdir
-            call system("rmdir '" . g:rplugin.localtmpdir . "'")
+            if has('nvim')
+                call jobstart("rmdir '" . g:rplugin.localtmpdir . "'", {'detach': v:true})
+            else
+                call system("rmdir '" . g:rplugin.localtmpdir . "'")
+            endif
         endif
     endif
 endfunction
@@ -696,6 +704,9 @@ endfunction
 
 function ShowRDebugInfo()
     for key in keys(g:rplugin.debug_info)
+        if len(g:rplugin.debug_info[key]) == 0
+            continue
+        endif
         echohl Title
         echo key
         echohl None
@@ -1079,7 +1090,7 @@ endif
 autocmd FuncUndefined StartR exe "source " . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/start_r.vim"
 
 function GlobalRInit(...)
-    let g:rplugin.debug_info['Time']['start_nrs'] = reltime()
+    let g:rplugin.debug_info['Time']['GlobalRInit'] = reltime()
     exe 'source ' . substitute(g:rplugin.home, " ", "\\ ", "g") . "/R/start_nrs.vim"
     " Set security variables
     if has('nvim') && !has("nvim-0.7.0")
@@ -1089,9 +1100,8 @@ function GlobalRInit(...)
         let $NVIMR_ID = rand(srand())
         let $NVIMR_SECRET = rand()
     end
-    let g:rplugin.debug_info['Time']['R_before_nrs'] = reltime()
     call CheckNvimcomVersion()
-    let g:rplugin.debug_info['Time']['start_nrs'] = reltimefloat(reltime(g:rplugin.debug_info['Time']['start_nrs'], reltime()))
+    let g:rplugin.debug_info['Time']['GlobalRInit'] = reltimefloat(reltime(g:rplugin.debug_info['Time']['GlobalRInit'], reltime()))
 endfunction
 
 if v:vim_did_enter == 0
@@ -1099,4 +1109,4 @@ if v:vim_did_enter == 0
 else
     call timer_start(1, "GlobalRInit")
 endif
-let g:rplugin.debug_info['Time']['common_global'] = reltimefloat(reltime(g:rplugin.debug_info['Time']['common_global'], reltime()))
+let g:rplugin.debug_info['Time']['common_global.vim'] = reltimefloat(reltime(g:rplugin.debug_info['Time']['common_global.vim'], reltime()))

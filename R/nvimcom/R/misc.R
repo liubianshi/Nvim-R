@@ -34,16 +34,16 @@ vi <- function(name = NULL, file = "") {
 
 nvim_capture_source_output <- function(s, nm) {
     o <- capture.output(base::source(s, echo = TRUE), file = NULL)
-    o <- paste0(o, collapse = "\002")
-    o <- gsub("'", "\004", o)
+    o <- paste0(o, collapse = "\x14")
+    o <- gsub("'", "\x13", o)
     .C("nvimcom_msg_to_nvim", paste0("call GetROutput('", nm, "', '", o, "')"),
        PACKAGE = "nvimcom")
 }
 
 nvim_dput <- function(oname, howto = "tabnew") {
     o <- capture.output(eval(parse(text = paste0("dput(", oname, ")"))))
-    o <- paste0(o, collapse = "\002")
-    o <- gsub("'", "\004", o)
+    o <- paste0(o, collapse = "\x14")
+    o <- gsub("'", "\x13", o)
     .C("nvimcom_msg_to_nvim",
        paste0("call ShowRObj('", howto, "', '", oname, "', 'r', '", o, "')"),
        PACKAGE = "nvimcom")
@@ -93,8 +93,8 @@ nvim_viewobj <- function(oname, fenc = "", nrows = NULL, howto = "tabnew", R_df_
             txt <- capture.output(write.table(o, sep = getOption("nvimcom.delim"), row.names = FALSE,
                                               fileEncoding = fenc))
         }
-        txt <- paste0(txt, collapse = "\002")
-        txt <- gsub("'", "\004", txt)
+        txt <- paste0(txt, collapse = "\x14")
+        txt <- gsub("'", "\x13", txt)
         .C("nvimcom_msg_to_nvim",
            paste0("call RViewDF('", oname, "', '", howto, "', '", txt, "')"),
            PACKAGE = "nvimcom")
@@ -144,7 +144,7 @@ nvim_format <- function(l1, l2, wco, sw, txt) {
         }
     }
 
-    txt <- strsplit(gsub("\004", "'", txt), "\002")[[1]]
+    txt <- strsplit(gsub("\x13", "'", txt), "\x14")[[1]]
     if (getOption("nvimcom.formatfun") == "tidy_source") {
         ok <- formatR::tidy_source(text = txt, width.cutoff = wco, output = FALSE)
         if (inherits(ok, "try-error")) {
@@ -153,7 +153,7 @@ nvim_format <- function(l1, l2, wco, sw, txt) {
                PACKAGE = "nvimcom")
             return(invisible(NULL))
         }
-        txt <- gsub("'", "\004", gsub("\n", "\002", ok$text.tidy))
+        txt <- gsub("'", "\x13", paste0(ok$text.tidy, collapse = "\x14"))
     } else if (getOption("nvimcom.formatfun") == "style_text") {
         ok <- try(styler::style_text(txt, indent_by = sw))
         if (inherits(ok, "try-error")) {
@@ -162,7 +162,7 @@ nvim_format <- function(l1, l2, wco, sw, txt) {
                PACKAGE = "nvimcom")
             return(invisible(NULL))
         }
-        txt <- gsub("'", "\004", paste0(ok, collapse = "\002"))
+        txt <- gsub("'", "\x13", paste0(ok, collapse = "\x14"))
     }
 
     .C("nvimcom_msg_to_nvim",
@@ -178,133 +178,14 @@ nvim_insert <- function(cmd, howto = "tabnew") {
            paste0("call RWarningMsg('Error trying to execute the command \"", cmd, "\"')"),
            PACKAGE = "nvimcom")
     } else {
-        o <- paste0(o, collapse = "\002")
-        o <- gsub("'", "\004", o)
+        o <- paste0(o, collapse = "\x14")
+        o <- gsub("'", "\x13", o)
         .C("nvimcom_msg_to_nvim",
            paste0("call FinishRInsert('", howto, "', '", o, "')"),
            PACKAGE = "nvimcom")
     }
     return(invisible(NULL))
 }
-
-###############################################################################
-# The code of the next four functions were copied from the gbRd package
-# version 0.4-11 (released on 2012-01-04) and adapted to nvimcom.
-# The gbRd package was developed by Georgi N. Boshnakov.
-
-gbRd.set_sectag <- function(s, sectag, eltag) {
-    attr(s, "Rd_tag") <- eltag  # using `structure' would be more elegant...
-    res <- list(s)
-    attr(res, "Rd_tag") <- sectag
-    res
-}
-
-gbRd.fun <- function(x, pkg) {
-    rdo <- NULL # prepare the "Rd" object rdo
-    x <- do.call(utils::help, list(x, pkg, help_type = "text",
-                               verbose = FALSE,
-                               try.all.packages = FALSE))
-    if (length(x) == 0)
-        return(NULL)
-
-    # If more matches are found will `paths' have length > 1?
-    f <- as.character(x[1]) # removes attributes of x.
-
-    path <- dirname(f)
-    dirpath <- dirname(path)
-    pkgname <- basename(dirpath)
-    RdDB <- file.path(path, pkgname)
-
-    if (file.exists(paste(RdDB, "rdx", sep = "."))) {
-        rdo <- tools:::fetchRdDB(RdDB, basename(f))
-    }
-    if (is.null(rdo))
-        return(NULL)
-
-    tags <- tools:::RdTags(rdo)
-    keep_tags <- c("\\title", "\\name", "\\arguments")
-    rdo[which(!(tags %in% keep_tags))] <-  NULL
-
-    rdo
-}
-
-gbRd.get_args <- function(rdo, arg) {
-    tags <- tools:::RdTags(rdo)
-    wtags <- which(tags == "\\arguments")
-
-    if (length(wtags) != 1)
-        return(NULL)
-
-    rdargs <- rdo[[wtags]] # use of [[]] assumes only one element here
-    f <- function(x) {
-        wrk0 <- as.character(x[[1]])
-        for (w in wrk0)
-            if (w %in% arg)
-                return(TRUE)
-
-        wrk <- strsplit(wrk0, ",[ ]*")
-        if (!is.character(wrk[[1]])) {
-            warning("wrk[[1]] is not a character vector! ", wrk)
-            return(FALSE)
-        }
-        wrk <- any(wrk[[1]] %in% arg)
-        wrk
-    }
-    sel <- !sapply(rdargs, f)
-
-    ## deal with "..." arg
-    if ("..." %in% arg || "\\dots" %in% arg) {  # since formals() represents ... by "..."
-        f2 <- function(x) {
-            if (is.list(x[[1]]) && length(x[[1]]) > 0 &&
-               attr(x[[1]][[1]], "Rd_tag") == "\\dots")
-                TRUE
-            else
-                FALSE
-        }
-        i2 <- sapply(rdargs, f2)
-        sel[i2] <- FALSE
-    }
-
-    rdargs[sel] <- NULL   # keeps attributes (even if 0 or 1 elem remain).
-    rdargs
-}
-
-gbRd.args2txt <- function(pkg = NULL, rdo, arglist) {
-    rdo <- gbRd.fun(rdo, pkg)
-
-    if (is.null(rdo))
-        return(list())
-
-    get_items <- function(a, rdo) {
-        if (is.null(a) || is.na(a))
-            return(NA)
-        # Build a dummy documentation with only one item in the "arguments" section
-        x <- list()
-        class(x) <- "Rd"
-        x[[1]] <- gbRd.set_sectag("Dummy name", sectag = "\\name", eltag = "VERB")
-        x[[2]] <- gbRd.set_sectag("Dummy title", sectag = "\\title", eltag = "TEXT")
-        x[[3]] <- gbRd.get_args(rdo, a)
-        tags <- tools:::RdTags(x)
-
-        # We only need the section "arguments", but print(x) will result in
-        # nothing useful if either "title" or "name" section is missing
-        keep_tags <- c("\\title", "\\name", "\\arguments")
-        x[which(!(tags %in% keep_tags))] <-  NULL
-
-        res <- paste0(x, collapse = "", sep = "")
-
-        # The result is (example from utils::available.packages()):
-        # \name{Dummy name}\title{Dummy title}\arguments{\item{max_repo_cache_age}{any
-        # cached values older than this in seconds     will be ignored. See \sQuote{Details}.   }}
-
-        .Call("get_section", res, "arguments", PACKAGE = "nvimcom")
-    }
-    argl <- lapply(arglist, get_items, rdo)
-    names(argl) <- arglist
-    argl
-}
-
-###############################################################################
 
 nvim.GlobalEnv.fun.args <- function(funcname) {
     txt <- nvim.args(funcname)
@@ -328,6 +209,7 @@ nvim.get.summary <- function(obj, wdth) {
     if (isnull == TRUE)
         return(invisible(NULL))
 
+
     owd <- getOption("width")
     options(width = wdth)
     if (Sys.getenv("NVIMR_COMPLCB") == "SetComplMenu") {
@@ -335,22 +217,23 @@ nvim.get.summary <- function(obj, wdth) {
         txt <- capture.output(print(sobj))
     } else {
         txt <- ""
-        if (!is.null(attr(obj, "label")))
-            txt <- append(txt, capture.output(cat("\n\n", attr(obj, "label"))))
+        objlbl <- attr(obj, "label")
+        if (!is.null(objlbl))
+            txt <- append(txt, capture.output(cat("\n\n", objlbl)))
         txt <- append(txt, capture.output(cat("\n\n```rout\n")))
-        if (is.factor(obj) || is.numeric(obj)) {
+        if (is.factor(obj) || is.numeric(obj) || is.logical(obj)) {
             sobj <- try(summary(obj), silent = TRUE)
             txt <- append(txt, capture.output(print(sobj)))
         } else {
-            sobj <- try(utils::str(obj), silent = TRUE)
-            txt <- append(txt, capture.output(print(sobj)))
+            sobj <- try(capture.output(utils::str(obj)), silent = TRUE)
+            txt <- append(txt, sobj)
         }
         txt <- append(txt, capture.output(cat("```\n")))
     }
     options(width = owd)
 
     txt <- paste0(txt, collapse = "\n")
-    txt <- gsub("'", "\004", gsub("\n", "\002", txt))
+    txt <- gsub("'", "\x13", gsub("\n", "\x14", txt))
 
     if (Sys.getenv("NVIMR_COMPLCB") == "SetComplMenu") {
         .C("nvimcom_msg_to_nvim", paste0("call FinishGetSummary('", txt, "')"), PACKAGE = "nvimcom")

@@ -1,10 +1,129 @@
+###############################################################################
+# The code of the next four functions were copied from the gbRd package
+# version 0.4-11 (released on 2012-01-04) and adapted to nvimcom.
+# The gbRd package was developed by Georgi N. Boshnakov.
+
+gbRd.set_sectag <- function(s, sectag, eltag) {
+    attr(s, "Rd_tag") <- eltag  # using `structure' would be more elegant...
+    res <- list(s)
+    attr(res, "Rd_tag") <- sectag
+    res
+}
+
+gbRd.fun <- function(x, pkg) {
+    rdo <- NULL # prepare the "Rd" object rdo
+    x <- do.call(utils::help, list(x, pkg, help_type = "text",
+                               verbose = FALSE,
+                               try.all.packages = FALSE))
+    if (length(x) == 0)
+        return(NULL)
+
+    # If more matches are found will `paths' have length > 1?
+    f <- as.character(x[1]) # removes attributes of x.
+
+    path <- dirname(f)
+    dirpath <- dirname(path)
+    pkgname <- basename(dirpath)
+    RdDB <- file.path(path, pkgname)
+
+    if (file.exists(paste(RdDB, "rdx", sep = "."))) {
+        rdo <- tools:::fetchRdDB(RdDB, basename(f))
+    }
+    if (is.null(rdo))
+        return(NULL)
+
+    tags <- tools:::RdTags(rdo)
+    keep_tags <- c("\\title", "\\name", "\\arguments")
+    rdo[which(!(tags %in% keep_tags))] <-  NULL
+
+    rdo
+}
+
+gbRd.get_args <- function(rdo, arg) {
+    tags <- tools:::RdTags(rdo)
+    wtags <- which(tags == "\\arguments")
+
+    if (length(wtags) != 1)
+        return(NULL)
+
+    rdargs <- rdo[[wtags]] # use of [[]] assumes only one element here
+    f <- function(x) {
+        wrk0 <- as.character(x[[1]])
+        for (w in wrk0)
+            if (w %in% arg)
+                return(TRUE)
+
+        wrk <- strsplit(wrk0, ",[ ]*")
+        if (!is.character(wrk[[1]])) {
+            warning("wrk[[1]] is not a character vector! ", wrk)
+            return(FALSE)
+        }
+        wrk <- any(wrk[[1]] %in% arg)
+        wrk
+    }
+    sel <- !sapply(rdargs, f)
+
+    ## deal with "..." arg
+    if ("..." %in% arg || "\\dots" %in% arg) {  # since formals() represents ... by "..."
+        f2 <- function(x) {
+            if (is.list(x[[1]]) && length(x[[1]]) > 0 &&
+               attr(x[[1]][[1]], "Rd_tag") == "\\dots")
+                TRUE
+            else
+                FALSE
+        }
+        i2 <- sapply(rdargs, f2)
+        sel[i2] <- FALSE
+    }
+
+    rdargs[sel] <- NULL   # keeps attributes (even if 0 or 1 elem remain).
+    rdargs
+}
+
+gbRd.args2txt <- function(pkg = NULL, rdo, arglist) {
+    rdo <- gbRd.fun(rdo, pkg)
+
+    if (is.null(rdo))
+        return(list())
+
+    get_items <- function(a, rdo) {
+        if (is.null(a) || is.na(a))
+            return(NA)
+        # Build a dummy documentation with only one item in the "arguments" section
+        x <- list()
+        class(x) <- "Rd"
+        x[[1]] <- gbRd.set_sectag("Dummy name", sectag = "\\name", eltag = "VERB")
+        x[[2]] <- gbRd.set_sectag("Dummy title", sectag = "\\title", eltag = "TEXT")
+        x[[3]] <- gbRd.get_args(rdo, a)
+        tags <- tools:::RdTags(x)
+
+        # We only need the section "arguments", but print(x) will result in
+        # nothing useful if either "title" or "name" section is missing
+        keep_tags <- c("\\title", "\\name", "\\arguments")
+        x[which(!(tags %in% keep_tags))] <-  NULL
+
+        res <- paste0(x, collapse = "", sep = "")
+
+        # The result is (example from utils::available.packages()):
+        # \name{Dummy name}\title{Dummy title}\arguments{\item{max_repo_cache_age}{any
+        # cached values older than this in seconds     will be ignored. See \sQuote{Details}.   }}
+
+        .Call("get_section", res, "arguments", PACKAGE = "nvimcom")
+    }
+    argl <- lapply(arglist, get_items, rdo)
+    names(argl) <- arglist
+    argl
+}
+
+###############################################################################
+
 
 # For building omnls files
 nvim.fix.string <- function(x, sdq = TRUE) {
     x <- gsub("\n", "\\\\n", x)
     x <- gsub("\r", "\\\\r", x)
     x <- gsub("\t", "\\\\t", x)
-    x <- gsub("'", "\004", x)
+    x <- gsub("'", "\x13", x)
     if (sdq) {
         x <- gsub('"', '\\\\"', x)
     } else {
@@ -95,41 +214,41 @@ nvim.args <- function(funcname, txt = "", pkg = NULL, objclass, extrainfo = FALS
     for (field in names(frm)) {
         type <- typeof(frm[[field]])
         if (extrainfo) {
-            str1 <- paste0("{'word': '", field)
+            str1 <- paste0("{\x12word\x12: \x12", field)
             if (type == "symbol") {
-                str2 <- paste0("', 'menu': ' '")
+                str2 <- paste0("\x12, \x12menu\x12: \x12 \x12")
             } else if (type == "character") {
-                str2 <- paste0(" = ', 'menu': '\"", nvim.fix.string(frm[[field]]), "\"'")
+                str2 <- paste0(" = \x12, \x12menu\x12: \x12\"", nvim.fix.string(frm[[field]]), "\"\x12")
             } else if (type == "logical" || type == "double" || type == "integer") {
-                str2 <- paste0(" = ', 'menu': '", as.character(frm[[field]]), "'")
+                str2 <- paste0(" = \x12, \x12menu\x12: \x12", as.character(frm[[field]]), "\x12")
             } else if (type == "NULL") {
-                str2 <- paste0(" = ', 'menu': 'NULL'")
+                str2 <- paste0(" = \x12, \x12menu\x12: \x12NULL\x12")
             } else if (type == "language") {
-                str2 <- paste0(" = ', 'menu': '",
-                               nvim.fix.string(deparse(frm[[field]]), FALSE), "'")
+                str2 <- paste0(" = \x12, \x12menu\x12: \x12",
+                               nvim.fix.string(deparse(frm[[field]]), FALSE), "\x12")
             } else {
-                str2 <- paste0("', 'menu': ' '")
+                str2 <- paste0("\x12, \x12menu\x12: \x12 \x12")
             }
             if (pkgname != ".GlobalEnv" && extrainfo && length(frm) > 0)
-                res <- append(res, paste0(str1, str2, ", 'user_data': {'cls': 'a', 'argument': '",
-                                          arglist[[field]], "'}}, "))
+                res <- append(res, paste0(str1, str2, ", \x12user_data\x12: {\x12cls\x12: \x12a\x12, \x12argument\x12: \x12",
+                                          arglist[[field]], "\x12}}, "))
             else
                 res <- append(res, paste0(str1, str2, "}, "))
         } else {
             if (type == "symbol") {
-                res <- append(res, paste0("['", field, "'], "))
+                res <- append(res, paste0("[\x12", field, "\x12], "))
             } else if (type == "character") {
-                res <- append(res, paste0("['", field, "', '\"",
-                                          nvim.fix.string(frm[[field]]), "\"'], "))
+                res <- append(res, paste0("[\x12", field, "\x12, \x12\"",
+                                          nvim.fix.string(frm[[field]]), "\"\x12], "))
             } else if (type == "logical" || type == "double" || type == "integer") {
-                res <- append(res, paste0("['", field, "', '", as.character(frm[[field]]), "'], "))
+                res <- append(res, paste0("[\x12", field, "\x12, \x12", as.character(frm[[field]]), "\x12], "))
             } else if (type == "NULL") {
-                res <- append(res, paste0("['", field, "', 'NULL'], "))
+                res <- append(res, paste0("[\x12", field, "\x12, \x12NULL\x12], "))
             } else if (type == "language") {
-                res <- append(res, paste0("['", field, "', '",
-                                          nvim.fix.string(deparse(frm[[field]]), FALSE), "'], "))
+                res <- append(res, paste0("[\x12", field, "\x12, \x12",
+                                          nvim.fix.string(deparse(frm[[field]]), FALSE), "\x12], "))
             } else {
-                res <- append(res, paste0("['", field, "'], "))
+                res <- append(res, paste0("[\x12", field, "\x12], "))
                 warning(paste0("nvim.args: ", funcname, " [", field, "]", " (typeof = ", type, ")"))
             }
         }
@@ -209,9 +328,6 @@ nvim.omni.line <- function(x, envir, printenv, curlevel, maxlevel = 0) {
             }
         }
     }
-
-    # The magrittr package has (or used to have) an alias named `n'est pas`
-    x <- gsub("'", "\004", x)
 
     if (is.null(xx)) {
         x.class <- ""
@@ -504,7 +620,7 @@ nvim.buildomnils <- function(p) {
     }
 
     if (need_build) {
-        msg <- paste0("echo 'Building completion list for \"", p, "\"'\002\n")
+        msg <- paste0("echo 'Building completion list for \"", p, "\"'\x14\n")
         cat(msg)
         flush(stdout())
         unlink(c(paste0(bdir, pbuilt), paste0(bdir, fbuilt), paste0(bdir, abuilt)))

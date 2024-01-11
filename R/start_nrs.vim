@@ -37,6 +37,7 @@ function CheckNvimcomVersion()
     if exists("g:R_remote_compldir")
         let scrptnm = g:R_remote_compldir . "/tmp/before_nrs.R"
     endif
+    let g:rplugin.debug_info['Time']['before_nrs.R'] = reltime()
     let g:rplugin.jobs["Init R"] = StartJob([g:rplugin.Rcmd, "--quiet", "--no-save", "--no-restore", "--slave", "-f", scrptnm], jobh)
     call AddForDeletion(g:rplugin.tmpdir . "/libPaths")
 endfunction
@@ -70,13 +71,13 @@ function RInitStdout(...)
     endif
     if s:RoutLine != ''
         let rcmd = s:RoutLine . rcmd
-        if rcmd !~ "\002"
+        if rcmd !~ "\x14"
             let s:RoutLine = rcmd
             return
         endif
     endif
     if rcmd =~ '^RWarn: ' || rcmd =~ '^let ' || rcmd =~ '^echo '
-        if rcmd !~ "\002"
+        if rcmd !~ "\x14"
             " R has sent an incomplete line
             let s:RoutLine .= rcmd
             return
@@ -85,7 +86,7 @@ function RInitStdout(...)
 
         " In spite of flush(stdout()), rcmd might be concatenating two commands
         " (https://github.com/jalvesaq/Nvim-R/issues/713)
-        let rcmdl = split(rcmd, "\002", 0)
+        let rcmdl = split(rcmd, "\x14", 0)
         for rcmd in rcmdl
             if rcmd =~ '^RWarn: '
                 let s:RWarn += [substitute(rcmd, '^RWarn: ', '', '')]
@@ -143,8 +144,10 @@ function RInitExit(...)
             call RWarningMsg("ERROR: R exit code = " . a:2 . "! Please, run :RDebugInfo for details.")
         endif
     endif
-    let g:rplugin.debug_info["RInitErr"] = join(s:RBerr, "\n")
-    let g:rplugin.debug_info["RInitOut"] = join(s:RBout, "\n")
+    let g:rplugin.debug_info["before_nrs.R stderr"] = join(s:RBerr, "\n")
+    let g:rplugin.debug_info["before_nrs.R stdout"] = join(s:RBout, "\n")
+    unlet s:RBerr
+    unlet s:RBout
     call AddForDeletion(g:rplugin.tmpdir . "/bo_code.R")
     call AddForDeletion(g:rplugin.localtmpdir . "/libs_in_nrs_" . $NVIMR_ID)
     call AddForDeletion(g:rplugin.tmpdir . "/libnames_" . $NVIMR_ID)
@@ -156,7 +159,7 @@ function RInitExit(...)
         endfor
     endif
     if cnv_again == 0
-        let g:rplugin.debug_info['Time']['R_before_nrs'] = reltimefloat(reltime(g:rplugin.debug_info['Time']['R_before_nrs'], reltime()))
+        let g:rplugin.debug_info['Time']['before_nrs.R'] = reltimefloat(reltime(g:rplugin.debug_info['Time']['before_nrs.R'], reltime()))
     endif
 endfunction
 
@@ -303,7 +306,7 @@ function ShowBuildOmnilsError(stt)
     endif
 endfunction
 
-function s:BAExit(...)
+function BAAExit(...)
     if a:2 == 0 || a:2 == 512 " ssh success seems to be 512
         call JobStdin(g:rplugin.jobs["Server"], "41\n")
     endif
@@ -337,9 +340,9 @@ function s:BuildAllArgs(...)
         let scrptnm = g:R_remote_compldir . "/tmp/build_args.R"
     endif
     if has('nvim')
-        let jobh = {'on_exit': function('s:BAExit')}
+        let jobh = {'on_exit': function('BAAExit')}
     else
-        let jobh = {'exit_cb': 's:BAExit'}
+        let jobh = {'exit_cb': 'BAAExit'}
     endif
     let g:rplugin.jobs["Build_args"] = StartJob([g:rplugin.Rcmd, "--quiet", "--no-save", "--no-restore", "--slave", "-f", scrptnm], jobh)
 endfunction
