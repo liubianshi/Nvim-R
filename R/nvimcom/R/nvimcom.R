@@ -2,6 +2,9 @@
 NvimcomEnv <- new.env()
 NvimcomEnv$pkgdescr <- list()
 
+#' Function called by R when nvimcom is being loaded.
+#' Nvim-R creates environment variables and the start_options.R file to set
+#' nvimcom options.
 .onLoad <- function(libname, pkgname) {
     if (Sys.getenv("NVIMR_TMPDIR") == "")
         return(invisible(NULL))
@@ -29,13 +32,16 @@ NvimcomEnv$pkgdescr <- list()
         options(pager = nvim.hmsg)
 }
 
+#' Function called by R right after loading nvimcom to establish the TCP
+#' connection with the nvimrserver
 .onAttach <- function(libname, pkgname) {
     if (Sys.getenv("NVIMR_TMPDIR") == "")
         return(invisible(NULL))
-    if (version$os == "mingw32")
+    if (version$os == "mingw32") {
         termenv <- "MinGW"
-    else
+    } else {
         termenv <- Sys.getenv("TERM")
+    }
 
     if (interactive() && termenv != "" && termenv != "dumb" && Sys.getenv("NVIMR_COMPLDIR") != "") {
         dir.create(Sys.getenv("NVIMR_COMPLDIR"), showWarnings = FALSE)
@@ -60,12 +66,17 @@ NvimcomEnv$pkgdescr <- list()
            PACKAGE = "nvimcom")
     }
     if (!is.na(utils::localeToCharset()[1]) &&
-        utils::localeToCharset()[1] == "UTF-8" && version$os != "cygwin")
+        utils::localeToCharset()[1] == "UTF-8" && version$os != "cygwin") {
         NvimcomEnv$isAscii <- FALSE
-    else
+    } else {
         NvimcomEnv$isAscii <- TRUE
+    }
 }
 
+
+#' Stop the connection with nvimrserver and unload the nvimcom library
+#' This function is called by the command:
+#' detach("package:nvimcom", unload = TRUE)
 .onUnload <- function(libpath) {
     if (is.loaded("nvimcom_Stop", PACKAGE = "nvimcom")) {
         .C("nvimcom_Stop", PACKAGE = "nvimcom")

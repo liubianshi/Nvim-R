@@ -1,16 +1,12 @@
 # Nvim-R
 
-This is the development code of Nvim-R which improves Vim's support to edit
-R scripts.
+This is Nvim-R which improves Vim's support to edit R scripts.
 
 ## Installation
 
 If you use a plugin manager, follow its instructions on how to install plugins
 from GitHub. Users of [lazy.nvim](https://github.com/folke/lazy.nvim) who
 opted for `defaults.lazy=true` have to configure Nvim-R with `lazy=false`.
-
-The `stable` branch is a copy of the last released version plus minor bug
-fixes eventually found after the release.
 
 James Eapen maintains an online version of the plugin's
 [documentation](https://github.com/jamespeapen/Nvim-R/wiki).
@@ -58,7 +54,7 @@ note:
 ## The communication between R and either Vim or Neovim
 
 The diagram below shows how the communication between Vim/Neovim and R works.
-![Neovim-R communication](https://raw.githubusercontent.com/jalvesaq/Nvim-R/master/nvimrcom.png "Neovim-R communication")
+![Neovim-R communication](https://raw.githubusercontent.com/jalvesaq/Nvim-R/master/nvimrcom.svg "Neovim-R communication")
 
 The black arrow represents all commands that you trigger in the editor and
 that you can see being pasted into R Console.
@@ -102,8 +98,6 @@ but temporary files are used in a few cases.
    - [languageserver](https://cran.r-project.org/web/packages/languageserver/index.html): a language server for R.
 
    - [colorout](https://github.com/jalvesaq/colorout): a package to colorize R's output.
-
-   - [R-Vim-runtime](https://github.com/jalvesaq/R-Vim-runtime): development version of some Vim runtime files for R.
 
 [Neovim]: https://github.com/neovim/neovim
 [southernlights]: https://github.com/jalvesaq/southernlights
